@@ -1,7 +1,7 @@
 import { defaultImageCapabilityConfig, modelCapabilityConfigFor, normalizeImageValue, normalizeVideoValue, STANDARD_IMAGE_SIZE_VALUES, videoDurationAllowed, type ImageCapabilityConfig } from "@/lib/model-capabilities";
 import { videoResolutionComparisonKey } from "@/lib/video-generation-options";
 import { imageSizePresets } from "@/lib/image-size-presets";
-import { modelOptionName, resolveModelChannel, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { channelHasGenerationCredential, modelOptionName, resolveModelChannel, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 
 export type ModelInputSummary = {
     textCount: number;
@@ -31,6 +31,126 @@ export type ModelReferenceLimits = {
     maxVideos: number;
     maxAudios: number;
 };
+
+// Keep versions and input modes together; the provider menu remains the first level.
+const PRIORITY_MODEL_FAMILIES = [
+    "Seedance · 即梦", "Kling · 可灵", "Wan · 通义万相", "Veo", "Sora",
+    "Hailuo · 海螺", "Vidu", "Grok", "HappyHorse", "PixVerse", "Gemini", "Luma", "LTX",
+    "Seedream · 即梦图片", "FLUX", "OpenAI", "Claude", "DeepSeek", "Qwen · 通义千问", "Ideogram", "Recraft",
+];
+
+const PRIORITY_IMAGE_FAMILIES = [
+    "Nano Banana", "Seedream · 即梦图片", "GPT Image", "FLUX", "Qwen · 通义千问",
+    "Ideogram", "Recraft", "Grok", "Gemini", "Wan · 通义万相", "Luma",
+];
+
+const PRIORITY_TEXT_FAMILIES = ["DeepSeek", "OpenAI", "Claude", "Gemini", "Qwen · 通义千问", "Doubao · 豆包", "Kimi", "GLM · 智谱", "Grok", "MiniMax"];
+const PRIORITY_AUDIO_FAMILIES = ["Seed Audio · 豆包语音", "MiniMax", "ElevenLabs", "Gemini", "Grok", "Suno"];
+
+// Selection considers saved credentials and current references. It does not probe
+// paid endpoints or claim that provider permissions and balance are verified.
+export function modelPickerCompatibilityError(config: AiConfig, model: string, requirements?: ModelRequirements) {
+    const channel = resolveModelChannel(config, model);
+    if (channel.enabled === false) return "该渠道未启用";
+    if (!channel.baseUrl.trim()) return "请先配置渠道地址";
+    if (!channelHasGenerationCredential(channel)) return "请先配置该渠道的 API Key";
+    return modelCompatibilityError(config, model, requirements);
+}
+
+export function modelGroupAvailableCount(config: AiConfig, group: DisplayModelGroup, requirements?: ModelRequirements) {
+    return group.models.some((model) => !modelPickerCompatibilityError(config, model, requirements)) ? 1 : 0;
+}
+
+export function availableModelGroupsFirst(config: AiConfig, groups: DisplayModelGroup[], requirements?: ModelRequirements) {
+    const availability = new Map(groups.map((group) => [group.key, modelGroupAvailableCount(config, group, requirements)]));
+    return [...groups].sort((a, b) => availability.get(b.key)! - availability.get(a.key)!);
+}
+
+export function modelPurposeLabel(config: AiConfig, value: string, capability?: ModelCapability) {
+    const name = modelOptionName(value).toLowerCase();
+    if (capability === "image") {
+        if (/text-to-image/.test(name)) return "文生图";
+        if (/\/edit\b|image-to-image/.test(name)) return "图片编辑";
+        if (/upscal/.test(name)) return "图片放大";
+        if (/remove-background/.test(name)) return "移除背景";
+        const image = modelCapabilityConfigFor(config, value).image;
+        return image?.references.maxImages === 0 ? "文生图" : "文生图 · 图片参考";
+    }
+    if (capability === "video") {
+        if (/motion-control/.test(name)) return "动作控制";
+        if (/video-edit/.test(name)) return "视频编辑";
+        if (/start-end-frame|first-last-frame/.test(name)) return "首尾帧生视频";
+        if (/audio-to-video/.test(name)) return "音频生视频";
+        if (/reference-to-video/.test(name)) return "参考生视频";
+        if (/image-to-video|\bi2v\b/.test(name)) return "图生视频";
+        if (/text-to-video|\bt2v\b/.test(name)) return "文生视频";
+        const operations = modelCapabilityConfigFor(config, value).video?.operations;
+        return operations?.length === 1 ? videoOperationLabel(operations[0]) : "视频生成";
+    }
+    if (capability === "audio") return /lyrics/.test(name) ? "歌词生成" : /music|chirp|suno/.test(name) ? "音乐生成" : "语音生成";
+    return capability === "text" ? "文字 · 剧本" : "";
+}
+
+// A curated menu order, not a claim about live provider usage statistics.
+function compareFamilyModels(a: DisplayModelGroup, b: DisplayModelGroup) {
+    const identity = (group: DisplayModelGroup) => `${modelOptionName(group.models[0])} ${group.label}`.toLowerCase();
+    const specialty = (value: string) => /developer|lora/.test(value) ? 2 : /layer-decomposition|sequential|avatar|motion-control|video-edit|start-end-frame|video-extend|effects?|upscal|remove-background|relight|style-transfer|blend/.test(value) ? 1 : 0;
+    const version = (value: string) => {
+        const match = /(?:seedream|seedance|seed-audio|kling(?:-video)?|wan|gpt(?:-image)?|qwen(?:-image)?|flux|veo|vidu|hailuo|happyhorse|gemini|ltx|nano-?banana|claude(?:[-\s](?:opus|sonnet|haiku))?|deepseek|glm|kimi|speech|music|grok|chirp|\bv)[-\s]*(?:v|o|k)?(\d+(?:[.-]\d+)*)/.exec(value);
+        return match?.[1].split(/[.-]/).map(Number) || [];
+    };
+    const edition = (value: string) => /(?:^|[-\s/])(mini|lite)(?:$|[-\s/])/.test(value) ? 3 : /(?:^|[-\s/])(fast|flash|turbo|schnell)(?:$|[-\s/])/.test(value) ? 2 : /(?:^|[-\s/])(pro|max|ultra|prime|master)(?:$|[-\s/])/.test(value) ? 0 : 1;
+    const operation = (value: string) => /text-to-(?:image|video)|\bt2v\b/.test(value) ? 0 : /image-to-(?:image|video)|\bi2v\b|\/edit\b/.test(value) ? 1 : /reference-to-/.test(value) ? 2 : 0;
+    const left = identity(a), right = identity(b);
+    const specialOrder = specialty(left) - specialty(right);
+    if (specialOrder) return specialOrder;
+    const leftVersion = version(left), rightVersion = version(right);
+    for (let index = 0; index < Math.max(leftVersion.length, rightVersion.length); index++) {
+        const order = (rightVersion[index] || 0) - (leftVersion[index] || 0);
+        if (order) return order;
+    }
+    return edition(left) - edition(right) || operation(left) - operation(right) || a.label.localeCompare(b.label, undefined, { numeric: true });
+}
+
+export function groupModelsByFamily(config: AiConfig, groups: DisplayModelGroup[], capability?: ModelCapability, requirements?: ModelRequirements) {
+    const families = new Map<string, { key: string; label: string; models: DisplayModelGroup[]; availableCount: number }>();
+    for (const group of groups) {
+        const value = group.models[0];
+        const channel = resolveModelChannel(config, value);
+        const profile = channel.modelProfiles?.find((item) => item.model === modelOptionName(value));
+        const raw = `${profile?.family || ""} ${modelOptionName(value).split("/").slice(-2).join("/")} ${group.label}`;
+        const rules: Array<[RegExp, string]> = [
+            [/nano[-\s]?banana|gemini-(?:2\.5-flash|3\.1-flash|3-pro)-image/i, "Nano Banana"],
+            [/gpt[-\s]?image/i, "GPT Image"],
+            [/seed-audio|seed-tts/i, "Seed Audio · 豆包语音"], [/elevenlabs/i, "ElevenLabs"], [/suno|chirp/i, "Suno"],
+            [/seedance/i, "Seedance · 即梦"], [/kling/i, "Kling · 可灵"], [/wan\b|wan[\d.-]/i, "Wan · 通义万相"],
+            [/veo/i, "Veo"], [/vidu/i, "Vidu"], [/hailuo/i, "Hailuo · 海螺"], [/minimax|\bh3\b/i, "MiniMax"],
+            [/grok/i, "Grok"], [/happyhorse/i, "HappyHorse"], [/pixverse/i, "PixVerse"], [/ltx/i, "LTX"],
+            [/luma|ray-/i, "Luma"], [/seedream/i, "Seedream · 即梦图片"], [/flux/i, "FLUX"],
+            [/gemini/i, "Gemini"], [/gpt|openai/i, "OpenAI"], [/deepseek/i, "DeepSeek"], [/claude/i, "Claude"],
+            [/qwen/i, "Qwen · 通义千问"], [/ideogram/i, "Ideogram"], [/recraft/i, "Recraft"], [/sora/i, "Sora"],
+            [/doubao/i, "Doubao · 豆包"], [/kimi|moonshot/i, "Kimi"], [/glm|zai-org/i, "GLM · 智谱"],
+        ];
+        const label = rules.find(([pattern]) => pattern.test(raw))?.[1] || profile?.family || modelOptionName(value).split("/")[0] || "其他模型";
+        const family = families.get(label) || { key: label, label, models: [], availableCount: 0 };
+        family.models.push(group);
+        families.set(label, family);
+    }
+    const first = groups[0]?.models[0];
+    const firstProfile = first ? resolveModelChannel(config, first).modelProfiles?.find((item) => item.model === modelOptionName(first)) : undefined;
+    const mode = capability || firstProfile?.capability;
+    const priorities = mode === "image" ? PRIORITY_IMAGE_FAMILIES : mode === "text" ? PRIORITY_TEXT_FAMILIES : mode === "audio" ? PRIORITY_AUDIO_FAMILIES : PRIORITY_MODEL_FAMILIES;
+    for (const family of families.values()) {
+        family.models.sort(compareFamilyModels);
+        if (requirements) family.models = availableModelGroupsFirst(config, family.models, requirements);
+        family.availableCount = family.models.reduce((count, group) => count + modelGroupAvailableCount(config, group, requirements), 0);
+    }
+    const rank = (label: string) => {
+        const index = priorities.indexOf(label);
+        return index < 0 ? priorities.length : index;
+    };
+    return Array.from(families.values()).sort((a, b) => (requirements ? Number(b.availableCount > 0) - Number(a.availableCount > 0) : 0) || rank(a.label) - rank(b.label) || a.label.localeCompare(b.label));
+}
 
 export function groupModelsByDisplayName(config: AiConfig, models: string[]): DisplayModelGroup[] {
     const groups = new Map<string, DisplayModelGroup>();
@@ -76,6 +196,7 @@ export function modelCompatibilityError(config: AiConfig, model: string, require
         if (!input) return "";
         if (input.videoCount > 0) return "图片模型不支持参考视频";
         if (input.audioCount > 0) return "图片模型不支持参考音频";
+        if (visualInputCount > 0 && image.references.maxImages === 0) return "不支持参考图，请移除参考图";
         if (visualInputCount > image.references.maxImages) return `最多支持 ${image.references.maxImages} 张参考图`;
         return "";
     }
@@ -84,8 +205,12 @@ export function modelCompatibilityError(config: AiConfig, model: string, require
         const profile = modelCapabilityConfigFor(config, model).video!;
         if (requirements.videoSeconds && !videoDurationAllowed(profile, Number(requirements.videoSeconds))) return "不支持当前视频时长";
         if (!input) return "";
+        if (visualInputCount < profile.references.minImages) return `需要至少 ${profile.references.minImages} 张参考图`;
+        if (visualInputCount > 0 && profile.references.maxImages === 0) return profile.operations.includes("text_to_video") && profile.references.maxVideos === 0 && profile.references.maxAudios === 0 ? "仅支持文生视频，请移除参考图" : "不支持参考图，请移除参考图";
         if (visualInputCount > profile.references.maxImages) return `最多支持 ${profile.references.maxImages} 张参考图`;
+        if (input.videoCount > 0 && profile.references.maxVideos === 0) return "不支持参考视频，请移除参考视频";
         if (input.videoCount > profile.references.maxVideos) return `最多支持 ${profile.references.maxVideos} 个参考视频`;
+        if (input.audioCount > 0 && profile.references.maxAudios === 0) return "不支持参考音频，请移除参考音频";
         if (input.audioCount > profile.references.maxAudios) return `最多支持 ${profile.references.maxAudios} 个参考音频`;
         const operation = resolveVideoOperation(input, requirements.videoOperation);
         if (operation !== "concat" && !profile.operations.includes(operation)) return `不支持${videoOperationLabel(operation)}`;

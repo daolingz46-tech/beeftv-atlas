@@ -264,7 +264,7 @@ func newOutboundTransport(resolveHost func(context.Context, string) ([]net.IP, e
 			if err != nil {
 				return nil, err
 			}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(addresses[0].String(), port))
+			return dialValidatedIPs(ctx, network, port, addresses, dialer.DialContext)
 		},
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
@@ -273,6 +273,56 @@ func newOutboundTransport(resolveHost func(context.Context, string) ([]net.IP, e
 		TLSHandshakeTimeout:   15 * time.Second,
 		ExpectContinueTimeout: time.Second,
 	}
+}
+
+// Race only already validated addresses; resolving the hostname again here
+// would reopen DNS rebinding. An unreachable first address must not block all
+// alternatives (for example, IPv6 DNS on a computer without an IPv6 route).
+func dialValidatedIPs(ctx context.Context, network, port string, addresses []net.IP, dial func(context.Context, string, string) (net.Conn, error)) (net.Conn, error) {
+	if len(addresses) == 0 {
+		return nil, errors.New("no validated upstream address")
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type result struct {
+		conn net.Conn
+		err  error
+	}
+	results := make(chan result)
+	for index, ip := range addresses {
+		go func(index int, ip net.IP) {
+			if index > 0 {
+				timer := time.NewTimer(time.Duration(index) * 200 * time.Millisecond)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					return
+				}
+			}
+			conn, err := dial(ctx, network, net.JoinHostPort(ip.String(), port))
+			select {
+			case results <- result{conn, err}:
+			case <-ctx.Done():
+				if conn != nil {
+					_ = conn.Close()
+				}
+			}
+		}(index, ip)
+	}
+	var lastErr error
+	for range addresses {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case result := <-results:
+			if result.err == nil {
+				return result.conn, nil
+			}
+			lastErr = result.err
+		}
+	}
+	return nil, lastErr
 }
 
 func outboundProxyFromEnvironment(req *http.Request) (*url.URL, error) {

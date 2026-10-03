@@ -1,7 +1,9 @@
 package outbound
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +11,41 @@ import (
 	"testing"
 	"time"
 )
+
+func TestValidatedIPDialFallsBackWhenFirstAddressStalls(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	connected, peer := net.Pipe()
+	defer peer.Close()
+	firstCanceled := make(chan struct{})
+	started := time.Now()
+	conn, err := dialValidatedIPs(ctx, "tcp", "443", []net.IP{net.ParseIP("2001:4860::1"), net.ParseIP("8.8.8.8")}, func(ctx context.Context, network, address string) (net.Conn, error) {
+		if address == "[2001:4860::1]:443" {
+			<-ctx.Done()
+			close(firstCanceled)
+			return nil, ctx.Err()
+		}
+		if address != "8.8.8.8:443" {
+			t.Errorf("unexpected unvalidated address %s", address)
+		}
+		return connected, nil
+	})
+	if err != nil || conn != connected || time.Since(started) > time.Second {
+		t.Fatal("stalled first address prevented fallback")
+	}
+	defer conn.Close()
+	select {
+	case <-firstCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("losing dial was not canceled")
+	}
+	ctx, cancel = context.WithCancel(context.Background())
+	cancel()
+	_, err = dialValidatedIPs(ctx, "tcp", "443", []net.IP{net.ParseIP("8.8.8.8")}, func(ctx context.Context, _, _ string) (net.Conn, error) { return nil, ctx.Err() })
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("dial ignored cancellation")
+	}
+}
 
 func TestOutboundTransportUsesEnvironmentProxyAndHonorsNoProxy(t *testing.T) {
 	t.Setenv("HTTP_PROXY", "http://172.24.176.1:10808")

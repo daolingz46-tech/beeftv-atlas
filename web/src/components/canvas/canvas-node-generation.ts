@@ -482,7 +482,7 @@ export function buildNodeResponseMessages(context: NodeGenerationContext): AiTex
     ];
 }
 
-export async function hydrateNodeGenerationContext(context: NodeGenerationContext, projectId: string, domainProjectId?: string, mode?: CanvasGenerationMode, includeCharacterVoiceSamples = false, includeCharacterPrompt = true, referenceLimits?: ModelReferenceLimits) {
+export async function hydrateNodeGenerationContext(context: NodeGenerationContext, projectId: string, domainProjectId?: string, mode?: CanvasGenerationMode, includeCharacterVoiceSamples = false, includeCharacterPrompt = true, referenceLimits?: ModelReferenceLimits, keepStoredImages = false) {
     if (mode === "video") {
         const [referenceVideos, referenceAudios] = await Promise.all([
             Promise.all(context.referenceVideos.map(resolveReferenceMediaDuration)),
@@ -495,6 +495,7 @@ export async function hydrateNodeGenerationContext(context: NodeGenerationContex
         context.referenceImages.map(async (image) => {
             if (image.source?.kind === "drawing") return resolveCanvasDrawingReference(projectId, image);
             if (image.source?.kind === "colorgrade") return resolveCanvasColorGradeReference(image);
+            if (keepStoredImages && image.storageKey?.startsWith("resource:")) return image;
             return { ...image, dataUrl: await imageToDataUrl(image) };
         }),
     );
@@ -522,7 +523,7 @@ export async function hydrateNodeGenerationContext(context: NodeGenerationContex
         dataUrl: "",
         storageKey: resourceStorageKey(representation.resourceId),
     } satisfies ReferenceImage));
-    const hydratedCharacterImages = await Promise.all(characterImages.map(async (image) => ({ ...image, dataUrl: await imageToDataUrl(image) })));
+    const hydratedCharacterImages = keepStoredImages ? characterImages : await Promise.all(characterImages.map(async (image) => ({ ...image, dataUrl: await imageToDataUrl(image) })));
     referenceImages = [...referenceImages, ...hydratedCharacterImages];
     const characterBlocks = details.map((detail) => compileCharacterReferencePrompt(detail.asset.title, detail.character.definition));
     const resolvedCharacterVersions = details.map((detail) => ({ assetId: detail.asset.id, versionId: detail.character.versionId }));

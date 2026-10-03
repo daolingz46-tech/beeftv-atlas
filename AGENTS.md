@@ -138,3 +138,7 @@ BeefTV（`glanderness/BeefTV`）是面向 AI 影视与短剧创作的工作台�
 - Git 提交说明使用 `<type>(<scope>): <业务模块> - <变更摘要>`，`type` 为 `feat|fix|refactor|perf|docs|test|build|ci|chore|revert`。
 
 交付前至少检查：改动是否聚焦、调用方和类型是否同步、错误/权限/数据归属是否完整、必要文档是否同步、验证是否如实说明、是否留下密钥或本地数据。
+
+## 10. 本地定制版维护
+
+本仓库维护自己的定制分支 `atlas-cost`，`main` 记录已采用的纯官方基线。涉及官方更新、保存定制修改或升级软件时，先阅读 `docs/custom-version-maintenance.md`。`upstream` 指向作者仓库，`origin` 指向自己的私有仓库；不得向作者仓库推送定制提交。试合并在独立副本中进行，报告文本冲突和行为影响，完成必要验证及数据保护后再按用户授权范围交付升级。

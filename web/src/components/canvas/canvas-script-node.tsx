@@ -419,6 +419,7 @@ export function CanvasScriptNodeContent({
                                 config={generationConfig}
                                 value={generationConfig.model}
                                 capability="text"
+                                requirements={{ capability: "text", input: { textCount: 1, imageCount: mentionReferences.filter((item) => item.active && item.kind === "image").length, videoCount: mentionReferences.filter((item) => item.active && item.kind === "video").length, audioCount: mentionReferences.filter((item) => item.active && item.kind === "audio").length, characterCount: mentionReferences.filter((item) => item.active && item.kind === "character").length } }}
                                 placeholder="选择文本模型"
 
                                 onChange={onModelChange}

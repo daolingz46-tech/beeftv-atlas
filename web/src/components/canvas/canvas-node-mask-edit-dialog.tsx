@@ -105,7 +105,7 @@ export function CanvasImageMaskEditor({ imageDimensions, scale, config, onCancel
             <div className="relative">
                 <button type="button" aria-label="局部重绘设置" title="局部重绘设置" onClick={() => setSettingsOpen((value) => !value)} className={`grid size-9 place-items-center rounded-xl transition ${settingsOpen ? "bg-white/16 text-white" : "text-white/72 hover:bg-white/10 hover:text-white"}`}><Settings2 className="size-4" /></button>
                 {settingsOpen ? <div className="absolute bottom-11 right-0 w-80 space-y-3 rounded-2xl border border-white/10 bg-[#242424] p-3 text-white shadow-2xl" onPointerDown={(event) => event.stopPropagation()}>
-                    <ModelPicker config={generationConfig} value={generationConfig.imageModel || generationConfig.model} capability="image" fullWidth onChange={(model) => setGenerationConfig((current) => ({ ...current, model, imageModel: model, ...defaultImageParamsForModel(current, model) }))} />
+                    <ModelPicker config={generationConfig} value={generationConfig.imageModel || generationConfig.model} capability="image" requirements={{ capability: "image", input: { textCount: 1, imageCount: 1, videoCount: 0, audioCount: 0, characterCount: 0 } }} fullWidth onChange={(model) => setGenerationConfig((current) => ({ ...current, model, imageModel: model, ...defaultImageParamsForModel(current, model) }))} />
                     <ImageSettingsPanel config={generationConfig} showTitle={false} showCount={false} className="space-y-3" theme={theme} onConfigChange={(key, value) => setGenerationConfig((current) => ({ ...current, [key]: value }))} />
                 </div> : null}
             </div>

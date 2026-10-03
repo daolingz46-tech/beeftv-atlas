@@ -3,7 +3,7 @@ import { Check, ChevronDown, ChevronLeft } from "lucide-react";
 import { Popover } from "antd";
 
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
-import { compatibleModelInGroup, configuredModelDisplayName, groupModelsByDisplayName, modelCompatibilityError, resolveCompatibleModel, type ModelRequirements } from "@/lib/model-selection";
+import { availableModelGroupsFirst, compatibleModelInGroup, configuredModelDisplayName, groupModelsByDisplayName, groupModelsByFamily, modelPickerCompatibilityError, modelPurposeLabel, resolveCompatibleModel, type ModelRequirements } from "@/lib/model-selection";
 import { cn } from "@/lib/utils";
 import { modelDisplayName, modelIcon, PUBLIC_MODEL_CATALOG_ID, resolveModelChannel, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
@@ -44,30 +44,36 @@ export function ModelPicker({
     const theme = (canvasThemes[rawTheme as keyof typeof canvasThemes] ?? canvasThemes.dark) as CanvasTheme;
     const [open, setOpen] = useState(false);
     const [activeGroupKey, setActiveGroupKey] = useState<string | null>(null);
+    const [activeFamilyKey, setActiveFamilyKey] = useState<string | null>(null);
+    const [search, setSearch] = useState("");
     const [previewedModel, setPreviewedModel] = useState("");
     const [triggerWidth, setTriggerWidth] = useState<number | null>(null);
     const menuRef = useRef<HTMLDivElement>(null);
     const triggerRef = useRef<HTMLButtonElement>(null);
+    // Model changes reset output settings; only current references should prevent selection.
+    const selectionRequirements = useMemo(() => ({ ...requirements, capability: requirements?.capability || capability, videoSeconds: undefined, imageSize: undefined, options: undefined }), [requirements, capability]);
     const options = useMemo(() => Array.from(new Set(selectableModelsByCapability(config, capability).filter(Boolean))), [capability, config]);
     const optionGroups = useMemo(() => {
         const channelGroups = config.channels
-            .map((channel) => ({
-                key: channel.id,
-                label: channel.name || "未命名渠道",
-                scope: channel.id === PUBLIC_MODEL_CATALOG_ID ? "" : channel.scope === "system" ? "平台服务" : "我的模型",
-                models: groupModelsByDisplayName(
-                    config,
-                    options.filter((model) => resolveModelChannel(config, model).id === channel.id),
-                ),
-            }))
-            .filter((group) => group.models.length);
+            .map((channel) => {
+                const models = groupModelsByDisplayName(config, options.filter((model) => resolveModelChannel(config, model).id === channel.id));
+                const families = groupModelsByFamily(config, models, capability, selectionRequirements);
+                return {
+                    key: channel.id,
+                    label: channel.name || "未命名渠道",
+                    scope: channel.id === PUBLIC_MODEL_CATALOG_ID ? "" : channel.scope === "system" ? "平台服务" : "我的模型",
+                    models,
+                    families,
+                    availableCount: families.reduce((count, family) => count + family.availableCount, 0),
+                };
+            })
+            .filter((group) => group.models.length)
+            .sort((left, right) => Number(right.availableCount > 0) - Number(left.availableCount > 0));
         // options 已由当前有效渠道重建；任何无法解析渠道的旧值都直接丢弃，
         // 不再显示“其他模型 / 未指定渠道”这种不可用入口。
         return channelGroups;
-    }, [config, options]);
+    }, [config, options, capability, selectionRequirements]);
     const storedCurrent = value?.trim() || "";
-    // 参数档位会在选中模型后由调用方归一到其能力配置，不能因为旧模型留下的参数而禁止切换。
-    const selectionRequirements = requirements ? { ...requirements, videoSeconds: undefined, imageSize: undefined, options: undefined } : undefined;
     const resolvedCurrent = resolveCompatibleModel(config, storedCurrent, selectionRequirements) || storedCurrent;
     // 旧画布可能保存过已下架或前端历史内置模型；它们不能重新进入当前可选目录。
     const current = options.includes(resolvedCurrent) ? resolvedCurrent : "";
@@ -113,12 +119,14 @@ export function ModelPicker({
         if (nextOpen) {
             setPreviewedModel(current || options[0] || "");
             setActiveGroupKey(null);
+            setActiveFamilyKey(null);
+            setSearch("");
         }
         setOpen(nextOpen);
     };
     const focusMenuOption = (last = false) => {
         window.requestAnimationFrame(() => {
-            const buttons = menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]');
+            const buttons = menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]:not(:disabled)');
             const target = last ? buttons?.item((buttons?.length || 1) - 1) : buttons?.item(0);
             target?.focus();
         });
@@ -137,7 +145,8 @@ export function ModelPicker({
             return;
         }
         if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-        const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]'));
+        if (event.target instanceof HTMLInputElement) return;
+        const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]:not(:disabled)'));
         if (!buttons.length) return;
         event.preventDefault();
         const activeIndex = buttons.indexOf(document.activeElement as HTMLButtonElement);
@@ -171,8 +180,8 @@ export function ModelPicker({
                         {optionGroups.map((group) => {
                             const groupCurrent = group.models.find((item) => item.models.includes(current));
                             const firstModel = groupCurrent?.models[0] || group.models[0]?.models[0] || "";
-                            return <button key={group.key} type="button" className="canvas-model-picker-brand" onClick={() => { setActiveGroupKey(group.key); setPreviewedModel(firstModel); }}>
-                                <span className="canvas-model-picker-brand-copy"><strong>{group.label}</strong><small>{group.models.length} 个模型{group.scope ? ` · ${group.scope}` : ""}</small></span>
+                            return <button key={group.key} type="button" className="canvas-model-picker-brand" onClick={() => { setActiveGroupKey(group.key); setActiveFamilyKey(null); setSearch(""); setPreviewedModel(firstModel); }}>
+                                <span className="canvas-model-picker-brand-copy"><strong>{group.label}</strong><small>{group.availableCount} 可用 · {group.models.length} 个模型{group.scope ? ` · ${group.scope}` : ""}</small></span>
                                 <ChevronDown className="canvas-model-picker-brand-arrow" aria-hidden="true" />
                             </button>;
                         })}
@@ -182,23 +191,26 @@ export function ModelPicker({
                         {optionGroups.map((group) => {
                             const groupCurrent = group.models.find((item) => item.models.includes(current));
                             const firstModel = groupCurrent?.models[0] || group.models[0]?.models[0] || "";
-                            return <button key={group.key} type="button" className={cn("canvas-model-picker-brand", activeGroupKey === group.key && "is-active")} aria-pressed={activeGroupKey === group.key} onClick={() => { setActiveGroupKey(group.key); setPreviewedModel(firstModel); }}>
-                                <span className="canvas-model-picker-brand-copy"><strong>{group.label}</strong><small>{group.models.length} 个模型{group.scope ? ` · ${group.scope}` : ""}</small></span>
+                            return <button key={group.key} type="button" className={cn("canvas-model-picker-brand", activeGroupKey === group.key && "is-active")} aria-pressed={activeGroupKey === group.key} onClick={() => { setActiveGroupKey(group.key); setActiveFamilyKey(null); setSearch(""); setPreviewedModel(firstModel); }}>
+                                <span className="canvas-model-picker-brand-copy"><strong>{group.label}</strong><small>{group.availableCount} 可用 · {group.models.length} 个模型{group.scope ? ` · ${group.scope}` : ""}</small></span>
                                 <ChevronDown className="canvas-model-picker-brand-arrow" aria-hidden="true" />
                             </button>;
                         })}
                     </div>
-                    {optionGroups.filter((group) => group.key === activeGroupKey).map((group) => <section key={group.key} className="canvas-model-picker-group canvas-model-picker-model-pane min-w-0 overflow-hidden">
+                    {optionGroups.filter((group) => group.key === activeGroupKey).map((group) => <section key={group.key} className="canvas-model-picker-group canvas-model-picker-model-pane min-w-0 overflow-hidden" style={{ gridTemplateRows: "auto auto minmax(0, 1fr)" }}>
                         <div className="canvas-model-picker-secondary-head">
-                            <button type="button" className="canvas-model-picker-back" onClick={() => setActiveGroupKey(null)} aria-label="返回品牌列表"><ChevronLeft /></button>
-                            <span><strong>{group.label}</strong>{group.scope ? <small>{group.scope}</small> : null}</span>
+                            <button type="button" className="canvas-model-picker-back" onClick={() => { if (activeFamilyKey) setActiveFamilyKey(null); else setActiveGroupKey(null); setSearch(""); }} aria-label={activeFamilyKey ? "返回系列列表" : "返回渠道列表"}><ChevronLeft /></button>
+                            <span><strong>{activeFamilyKey || group.label}</strong><small>{activeFamilyKey ? "选择版本与用途" : "选择模型系列"}</small></span>
                         </div>
+                        <input aria-label="搜索模型或系列" placeholder="搜索模型或系列…" value={search} onChange={(event) => setSearch(event.target.value)} className="mx-2 mb-2 rounded-md border border-white/10 bg-transparent px-3 py-2 text-sm" />
                         <div className="canvas-model-picker-options grid min-w-0 gap-1">
-                            {group.models.map((modelGroup) => {
+                            {!activeFamilyKey && !search.trim() ? group.families.map((family) => <button key={family.key} type="button" role="option" aria-selected={false} className={cn("canvas-model-picker-brand", !family.availableCount && "opacity-45")} onClick={() => setActiveFamilyKey(family.key)}><span className="canvas-model-picker-brand-copy"><strong>{family.label}</strong><small>{family.availableCount} 可用 · {family.models.length} 个版本与用途{!family.availableCount ? " · 当前不可用" : ""}</small></span><ChevronDown className="canvas-model-picker-brand-arrow" /></button>) : null}
+                            {(activeFamilyKey || search.trim() ? availableModelGroupsFirst(config, group.families.filter((family) => !activeFamilyKey || family.key === activeFamilyKey).flatMap((family) => family.models.filter((item) => `${family.label} ${item.label} ${item.models.join(" ")} ${modelPurposeLabel(config, item.models[0], capability)}`.toLowerCase().includes(search.trim().toLowerCase()))), selectionRequirements) : []).map((modelGroup) => {
                                 const selected = modelGroup.models.includes(current);
-                                const model = compatibleModelInGroup(config, modelGroup.models, selectionRequirements, selected ? current : undefined);
+                                const model = compatibleModelInGroup(config, modelGroup.models.filter((item) => !modelPickerCompatibilityError(config, item, selectionRequirements)), selectionRequirements, selected ? current : undefined);
                                 const displayModel = model || (selected ? current : modelGroup.models[0]);
-                                const disabledReason = model ? "" : modelCompatibilityError(config, modelGroup.models[0], selectionRequirements) || "当前输入不符合该模型能力";
+                                const disabledReason = model ? "" : modelPickerCompatibilityError(config, modelGroup.models[0], selectionRequirements) || "当前输入不符合该模型能力";
+                                const purpose = modelPurposeLabel(config, displayModel, capability);
                                 return (
                                     <button
                                         key={modelGroup.key}
@@ -219,11 +231,11 @@ export function ModelPicker({
                                             window.requestAnimationFrame(() => triggerRef.current?.focus());
                                         }}
                                     >
-                                        <ModelLabel
+                                        <span className="flex min-w-0 flex-1 flex-col items-start gap-1.5"><ModelLabel
                                             config={config}
                                             model={displayModel}
                                             showConfiguredModelName={showConfiguredModelName}
-                                        />
+                                        />{purpose ? <small className="text-left text-xs leading-snug" style={{ color: theme.node.muted }}>{purpose}</small> : null}{disabledReason ? <small className="text-left text-xs leading-snug">{disabledReason}</small> : null}</span>
                                         {selected ? <Check className="canvas-model-picker-option-check ml-1 shrink-0" style={{ color: theme.node.activeStroke }} /> : null}
                                     </button>
                                 );

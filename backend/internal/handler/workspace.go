@@ -17,6 +17,24 @@ import (
 // workspace scope is injected by the runtime before the router is mounted, so
 // this endpoint never reads a cookie or creates an AuthSession.
 func RegisterWorkspaceRoutes(r *gin.RouterGroup, svc *app.Service) {
+	r.POST("/workspace/model-cost", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		raw, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, 16<<20))
+		if err != nil {
+			fail(c, http.StatusBadRequest, errors.New("费用预估输入过大"))
+			return
+		}
+		quote, err := requestCostEstimator(c, svc).EstimateGenerationCost(c.Request.Context(), user.ID, raw)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, quote)
+	})
 	r.GET("/workspace/bootstrap", func(c *gin.Context) {
 		scope, err := CurrentWorkspace(c)
 		if err != nil {

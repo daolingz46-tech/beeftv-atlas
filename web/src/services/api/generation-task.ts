@@ -324,6 +324,7 @@ function backendGenerationTaskInput(options: BackendGenerationTaskOptions, prepa
             mask: prepared.mask,
             metadata: generationMetadata(config, {
                 ...metadata,
+                ...(mode === "video" ? { videoEditOperation: videoOperation } : {}),
                 ...(options.clientOperationId ? { clientOperationId: options.clientOperationId } : {}),
                 ...(options.retryOf ? { retryOf: options.retryOf } : {}),
                 ...(options.attemptGroupId ? { attemptGroupId: options.attemptGroupId } : {}),

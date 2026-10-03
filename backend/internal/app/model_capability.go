@@ -419,6 +419,17 @@ func applyModelSpecificVideoCapability(profile *VideoCapabilityConfig, protocol 
 	}
 	normalizedProtocol := strings.TrimSpace(protocol)
 	normalizedModel := strings.ToLower(strings.TrimSpace(modelName))
+	if strings.HasPrefix(normalizedProtocol, "atlas-model-") {
+		value := *profile
+		if value.Duration.Selection == "range" && value.Duration.Min == 0 && value.Duration.Default >= 1 {
+			value.Duration.Min = 1
+		}
+		if strings.HasSuffix(normalizedModel, "/audio-to-video") && value.References.MaxAudios > 0 {
+			value.Operations = appendUniqueString(append([]string(nil), profile.Operations...), "audio_to_video")
+			value.DefaultOperation = "audio_to_video"
+		}
+		return &value
+	}
 	if model.ChannelInterfaceType(normalizedProtocol) != model.ChannelInterfaceAgnesVideo {
 		return profile
 	}

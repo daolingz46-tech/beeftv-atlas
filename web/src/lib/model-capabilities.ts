@@ -617,7 +617,14 @@ export function modelCapabilityConfigFor(
     const profile = channel?.modelProfiles?.find((item) => item.model === modelName && item.capabilityConfig && !Array.isArray(item.capabilityConfig)) || channel?.modelProfiles?.find((item) => item.model === modelName);
     const protocol = profile?.protocol || channel?.interfaceType;
     const fallback = defaultModelCapabilityConfig(protocol, modelName);
-    const alignMaterialPixels = (video: VideoCapabilityConfig | undefined) => {
+    const alignProviderCapabilities = (video: VideoCapabilityConfig | undefined) => {
+		if (video && protocol?.startsWith("atlas-model-")) {
+			if (video.duration.selection === "range" && video.duration.min === 0 && video.duration.default >= 1) video.duration = { ...video.duration, min: 1 };
+			if (modelName.endsWith("/audio-to-video") && video.references.maxAudios > 0) {
+				video.operations = Array.from(new Set([...video.operations, "audio_to_video"]));
+				video.defaultOperation = "audio_to_video";
+			}
+		}
         let host = "";
         try { host = new URL(channel?.baseUrl || "").hostname.toLowerCase(); } catch { /* no public URL */ }
         const materialHost = ["enterprise.beefapi.com", "beefapi.com", "whatstoken.ai", "www.whatstoken.ai"].includes(host);
@@ -625,13 +632,13 @@ export function modelCapabilityConfigFor(
     };
 
     if (!profile?.capabilityConfig) {
-        alignMaterialPixels(fallback.video);
+        alignProviderCapabilities(fallback.video);
         return fallback;
     }
     const capabilityConfig = normalizeModelCapabilityConfig(profile.capabilityConfig);
     const text = capabilityConfig.text ? { ...fallback.text!, ...capabilityConfig.text, references: { ...fallback.text!.references, ...capabilityConfig.text.references } } : fallback.text;
     const video = (capabilityConfig.video ? { ...fallback.video!, ...capabilityConfig.video, references: { ...fallback.video!.references, ...capabilityConfig.video.references } } : fallback.video)!;
-    alignMaterialPixels(video);
+    alignProviderCapabilities(video);
     const configuredImage = capabilityConfig.image;
     const image = configuredImage
         ? (() => {

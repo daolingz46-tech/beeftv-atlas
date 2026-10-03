@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type Keyboard
 import { ArrowLeftRight, ArrowUp, AtSign, Boxes, Camera, ChevronDown, FileText, GripVertical, ImageIcon, ImagePlus, Link2, LoaderCircle, Maximize2, Music2, Pencil, SlidersHorizontal, UserRound, Video, WandSparkles, X } from "lucide-react";
 
 import { ModelPicker } from "@/components/model-picker";
+import { useGenerationCostEstimate } from "./use-generation-cost-estimate";
 import { defaultConfig, modelOptionName, resolveModelChannel, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { resolveAudioSpeechSettings } from "@/lib/audio-generation";
 import { resolveCanvasGenerationModel } from "@/lib/canvas/canvas-project-generation";
@@ -135,6 +136,7 @@ export function CanvasNodePromptPanel({ projectId, node, isRunning, onPromptChan
         return promptOptimizerPlugin.createPromptOptimizer(createPluginHostContext(promptOptimizerPlugin, promptOptimizerInstallation, globalConfig));
     }, [globalConfig, promptOptimizerEnabled, promptOptimizerInstallation]);
     const priceChannel = resolveModelChannel(config, config.model);
+    const cost = useGenerationCostEstimate(projectId, node, config, prompt, mode);
     const activeReferenceCount = activeReferences.length;
     const videoFrameOptions = resolvedMentionReferences.filter((item) => item.active && item.kind === "image").map((item) => ({ nodeId: item.nodeId, label: item.label, title: item.title, previewUrl: item.previewUrl }));
     const hasVideoPromptTools = mode === "video" && !simpleMode && videoFrameOptions.length > 0;
@@ -225,7 +227,7 @@ export function CanvasNodePromptPanel({ projectId, node, isRunning, onPromptChan
 
     const submit = () => {
         const text = prompt.trim();
-        if (!text || isRunning) return false;
+        if (!text || isRunning || (cost.atlas && cost.status !== "ready")) return false;
         onGenerate(node.id, mode, text);
         return true;
     };
@@ -306,10 +308,17 @@ export function CanvasNodePromptPanel({ projectId, node, isRunning, onPromptChan
     const renderSubmitButton = (expanded: boolean) => {
         const actionLabel = isRunning ? "生成中" : "生成";
         return (
-            <Button
+            <><span className="ml-auto flex min-w-0 flex-col items-end gap-0.5 text-xs" aria-live="polite">
+                {cost.atlas ? <>
+                    <span title={cost.error || cost.quote?.note || "Atlas Cloud 按当前配置预估，最终以实际账单为准"} style={{ color: theme.node.muted }}>
+                        {cost.status === "ready" && cost.quote ? `预计 $${cost.quote.price.toFixed(mode === "text" || mode === "audio" ? 6 : 4)} USD${mode === "image" ? ` / 本次 ${cost.count} 张` : mode === "text" ? ` / 本次 ${cost.count} 份` : " / 本次"}` : cost.status === "loading" ? "费用预估中…" : cost.status === "empty" ? "填写提示词后显示费用" : "费用预估失败"}
+                    </span>
+                    {cost.status === "error" ? <button type="button" className="max-w-64 text-right text-xs underline" title={cost.error} onClick={cost.refresh}>重试估价 · {cost.error}</button> : cost.status === "ready" ? <span title={cost.quote?.note} style={{ color: theme.node.faint }}>{cost.quote?.note ? mode === "text" ? "粗估按输出 1024 Token / 份，悬停查看依据" : "费用预估，悬停查看依据" : "预估，实际扣费以账单为准"}</span> : null}
+                </> : <span style={{ color: theme.node.muted }}>当前渠道暂无费用预估</span>}
+            </span><Button
                 type="text"
                 className="canvas-node-composer-submit canvas-node-composer-submit-canvas"
-                disabled={isRunning || isSubmitDisabled}
+                disabled={isRunning || isSubmitDisabled || (cost.atlas && cost.status !== "ready")}
                 style={
                     {
                         color: isSubmitDisabled ? theme.node.faint : theme.node.text,
@@ -319,12 +328,12 @@ export function CanvasNodePromptPanel({ projectId, node, isRunning, onPromptChan
                 }
                 onClick={() => (expanded ? submitExpandedPrompt() : submit())}
                 aria-label={actionLabel}
-                title={actionLabel}
+                title={cost.atlas && cost.status !== "ready" ? "请先取得当前配置的费用预估" : actionLabel}
             >
                 <span className="canvas-node-composer-submit-action" aria-hidden>
                     {isRunning ? <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" /> : <ArrowUp className="size-3.5" strokeWidth={2.4} />}
                 </span>
-            </Button>
+            </Button></>
         );
     };
 

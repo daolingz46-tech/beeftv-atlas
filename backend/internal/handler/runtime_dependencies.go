@@ -2,11 +2,13 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"mime/multipart"
 	"time"
 
 	"infinite-canvas/backend/internal/app"
 	"infinite-canvas/backend/internal/beefapi"
+	"infinite-canvas/backend/internal/generation"
 	"infinite-canvas/backend/internal/localapp"
 	"infinite-canvas/backend/internal/model"
 	localtask "infinite-canvas/backend/internal/task"
@@ -41,6 +43,7 @@ type RuntimeDependencies struct {
 	Projects           localapp.ProjectPort
 	Tasks              localapp.TaskPort
 	Generation         localapp.GenerationPort
+	CostEstimator      generation.CostEstimator
 	BeefAPI            *beefapi.Service
 }
 
@@ -54,6 +57,7 @@ type serviceRuntimeAdapter struct {
 	listProjects        func(string) ([]app.ProjectSummary, error)
 	tasksWithOptions    func(string, localtask.ListOptions) ([]localtask.Summary, error)
 	createTask          func(string, localtask.CreateRequest) (*model.Task, error)
+	estimateCost        func(context.Context, string, json.RawMessage) (*generation.CostEstimate, error)
 }
 
 func newServiceRuntimeAdapter(value *app.Service) serviceRuntimeAdapter {
@@ -62,7 +66,19 @@ func newServiceRuntimeAdapter(value *app.Service) serviceRuntimeAdapter {
 		readModelConfig: value.ReadLocalModelConfig, saveModelConfig: value.SaveLocalModelConfig,
 		resources: value.Resources, uploadLocalResource: value.UploadLocalResource,
 		listProjects: value.ListProjects, tasksWithOptions: value.TasksWithOptions, createTask: value.CreateLocalTask,
+		estimateCost: value.EstimateGenerationCost,
 	}
+}
+
+func (a serviceRuntimeAdapter) EstimateGenerationCost(ctx context.Context, userID string, input json.RawMessage) (*generation.CostEstimate, error) {
+	return a.estimateCost(ctx, userID, input)
+}
+
+func requestCostEstimator(c *gin.Context, fallback *app.Service) generation.CostEstimator {
+	if dependencies, ok := runtimeDependencies(c); ok && dependencies.CostEstimator != nil {
+		return dependencies.CostEstimator
+	}
+	return newServiceRuntimeAdapter(fallback)
 }
 
 func (a serviceRuntimeAdapter) AllowRequest(ctx context.Context, key string, limit int, window time.Duration) (bool, error) {

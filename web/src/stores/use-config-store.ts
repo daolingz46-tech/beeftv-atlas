@@ -369,6 +369,7 @@ export type ModelChannel = {
     modelProfiles?: Array<{
         model: string;
         displayName?: string;
+        family?: string;
         description?: string;
         icon?: string;
         capability: ModelCapability;
@@ -583,7 +584,7 @@ export function filterModelsByCapability(models: string[], capability?: ModelCap
 export function selectableModelsByCapability(config: AiConfig, capability?: ModelCapability) {
     // 选项目录只从当前有效渠道重建，不能信任旧快照里残留的 config.models。
     // 这样旧版本内置模型、未绑定渠道的裸模型不会再次进入创作端。
-    const models = modelOptionsFromChannels(config.channels);
+    const models = modelOptionsFromChannels(config.channels.filter((channel) => channel.enabled !== false));
     if (!capability) return models;
     return filterModelsByCapability(models, capability, config.channels);
 }

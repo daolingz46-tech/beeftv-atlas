@@ -6,6 +6,23 @@ import { DEFAULT_VIDEO_PROMPT_MAX_CHARS, defaultModelCapabilityConfig, modelCapa
 import { modelCompatibilityError } from "../src/lib/model-selection.ts";
 import type { AiConfig } from "../src/stores/use-config-store.ts";
 
+test("imported Atlas audio video profiles allow audio alone and a valid duration", () => {
+    const capability = defaultModelCapabilityConfig("agnes-video", "fixture");
+    const video = capability.video!;
+    video.duration = { selection: "range", min: 0, max: 30, step: 1, default: 5 };
+    video.references.maxAudios = 1;
+    video.operations = ["reference_to_video"];
+    video.defaultOperation = "reference_to_video";
+    const model = "ltx/fixture/audio-to-video";
+    const config = { channels: [{ id: "atlas", models: [model], modelProfiles: [{ model, protocol: "atlas-model-fixture", capabilityConfig: capability }] }] } as unknown as AiConfig;
+    const normalized = modelCapabilityConfigFor(config, `atlas::${model}`).video!;
+    assert.equal(normalized.duration.min, 1);
+    assert.equal(normalized.defaultOperation, "audio_to_video");
+    assert.ok(normalized.operations.includes("audio_to_video"));
+    assert.equal(video.duration.min, 0);
+    assert.deepEqual(video.operations, ["reference_to_video"]);
+});
+
 test("switching to MiniMax H3 replaces an unsupported 720p value with 768P", () => {
     const profile = defaultModelCapabilityConfig("minimax-video", "MiniMax-H3").video!;
 
