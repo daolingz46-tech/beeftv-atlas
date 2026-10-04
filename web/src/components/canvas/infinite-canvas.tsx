@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 
 import { resolveCanvasAppearance, resolveCanvasGridColor, type CanvasAppearance } from "@/lib/canvas/canvas-appearance";
 import { resolveCanvasPointerIntent } from "@/lib/canvas/canvas-selection";
+import { interpolateViewport } from "@/lib/canvas/canvas-viewport";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { applyCanvasLiveViewport, subscribeCanvasViewportPreview } from "@/lib/canvas/canvas-live-viewport";
 import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
@@ -61,6 +62,8 @@ export function InfiniteCanvas({ interactive = true, containerRef, viewport, app
     const containerRectRef = useRef<DOMRect | null>(null);
     const frameRef = useRef<number | null>(null);
     const nextViewportRef = useRef<ViewportTransform | null>(null);
+    const displayedViewportRef = useRef(viewport);
+    const wheelMotionRef = useRef<{ from: ViewportTransform; startedAt: number } | null>(null);
     const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const lastPreviewNotifyRef = useRef(0);
     const interactingRef = useRef(false);
@@ -85,6 +88,7 @@ export function InfiniteCanvas({ interactive = true, containerRef, viewport, app
         frameRef.current = null;
         syncTimerRef.current = null;
         nextViewportRef.current = null;
+        wheelMotionRef.current = null;
         delete container?.dataset.canvasViewportInteracting;
         setIsPanning(false);
         setIsSpacePressed(false);
@@ -92,9 +96,14 @@ export function InfiniteCanvas({ interactive = true, containerRef, viewport, app
     }, [interactive, containerRef]);
 
     useLayoutEffect(() => {
-        if (interactingRef.current) return;
+        if (interactingRef.current) {
+            // React 更新虚拟窗口后内层倍率已改变，同步外层倍率以保持实时相机不跳动。
+            applyCanvasLiveViewport(containerRef.current, displayedViewportRef.current, false);
+            return;
+        }
         viewportRef.current = viewport;
         scaleRef.current = viewport.k;
+        displayedViewportRef.current = viewport;
         applyCanvasLiveViewport(containerRef.current, viewport);
     }, [containerRef, viewport]);
 
@@ -102,8 +111,10 @@ export function InfiniteCanvas({ interactive = true, containerRef, viewport, app
         const container = containerRef.current;
         if (!container) return;
         return subscribeCanvasViewportPreview(container, (next) => {
+            if (interactingRef.current) return;
             viewportRef.current = next;
             scaleRef.current = next.k;
+            displayedViewportRef.current = next;
         });
     }, [containerRef]);
 
@@ -117,25 +128,43 @@ export function InfiniteCanvas({ interactive = true, containerRef, viewport, app
         [containerRef],
     );
 
-    const syncViewport = useCallback(() => { if (interactive) onViewportChange(viewportRef.current); }, [interactive, onViewportChange]);
+    const syncViewport = useCallback(() => {
+        if (!interactive) return;
+        if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+        nextViewportRef.current = null;
+        wheelMotionRef.current = null;
+        displayedViewportRef.current = viewportRef.current;
+        applyCanvasLiveViewport(containerRef.current, viewportRef.current);
+        onViewportChange(viewportRef.current);
+    }, [containerRef, interactive, onViewportChange]);
 
     const scheduleViewportChange = useCallback(
-        (next: ViewportTransform, commitAfterIdle = false) => {
+        (next: ViewportTransform, commitAfterIdle = false, smoothWheel = false) => {
             viewportRef.current = next;
             scaleRef.current = next.k;
-            onViewportPreviewChange?.(next);
             const container = containerRef.current;
             if (container) container.dataset.canvasViewportInteracting = "true";
             nextViewportRef.current = next;
-            if (frameRef.current) return;
-            frameRef.current = requestAnimationFrame((now) => {
+            wheelMotionRef.current = smoothWheel && !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+                ? { from: displayedViewportRef.current, startedAt: performance.now() }
+                : null;
+            const step = (now: number) => {
                 frameRef.current = null;
                 const pending = nextViewportRef.current;
                 if (!pending) return;
+                const motion = wheelMotionRef.current;
+                const progress = motion ? Math.min(1, (now - motion.startedAt) / 90) : 1;
+                const displayed = motion ? interpolateViewport(motion.from, pending, progress) : pending;
+                displayedViewportRef.current = displayed;
                 const notify = now - lastPreviewNotifyRef.current >= 32;
-                applyCanvasLiveViewport(containerRef.current, pending, notify);
+                applyCanvasLiveViewport(containerRef.current, displayed, notify);
                 if (notify) lastPreviewNotifyRef.current = now;
-            });
+                onViewportPreviewChange?.(displayed);
+                if (progress < 1) frameRef.current = requestAnimationFrame(step);
+                else wheelMotionRef.current = null;
+            };
+            if (frameRef.current === null) frameRef.current = requestAnimationFrame(step);
             if (!commitAfterIdle) return;
             if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
             syncTimerRef.current = setTimeout(() => {
@@ -225,7 +254,7 @@ export function InfiniteCanvas({ interactive = true, containerRef, viewport, app
                 x: mouseX - worldX * newScale,
                 y: mouseY - worldY * newScale,
                 k: newScale,
-            }, true);
+            }, true, looksLikeMouseWheel);
         },
         [containerRef, scheduleViewportChange],
     );
@@ -491,5 +520,5 @@ function wheelDeltaToPixels(delta: number, deltaMode: number) {
 }
 
 function clampScale(scale: number) {
-    return Math.min(Math.max(scale, 0.05), 2);
+    return Math.min(Math.max(scale, 0.05), 8);
 }

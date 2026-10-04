@@ -1,8 +1,8 @@
 import type { ViewportTransform } from "@/types/canvas";
 
 const MIN_VIEWPORT_SCALE = 0.05;
-const MIN_PREVIEW_RATIO = 0.85;
-const MAX_PREVIEW_RATIO = 1.25;
+const MIN_PREVIEW_RATIO = 0.5;
+const MAX_PREVIEW_RATIO = 2;
 
 export function calculateCanvasPreviewTransform(viewport: ViewportTransform, rasterViewport: ViewportTransform) {
     const ratio = viewport.k / Math.max(rasterViewport.k, MIN_VIEWPORT_SCALE);

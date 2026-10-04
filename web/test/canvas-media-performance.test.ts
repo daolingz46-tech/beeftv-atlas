@@ -49,6 +49,15 @@ describe("canvas dimension header rendering", () => {
 });
 
 describe("large canvas media rendering", () => {
+    test("reuses the mounted window for small pans and zooming into the current view", () => {
+        const previous = { x: 0, y: 0, k: 1 };
+        const size = { width: 1440, height: 900 };
+        expect(shouldRefreshCanvasVirtualization(previous, { x: -50, y: 30, k: 1 }, 0, 1000, size)).toBe(false);
+        expect(shouldRefreshCanvasVirtualization(previous, { x: -720, y: -450, k: 2 }, 0, 1000, size)).toBe(false);
+        expect(shouldRefreshCanvasVirtualization(previous, { x: 36, y: 22.5, k: 0.95 }, 0, 1000, size)).toBe(false);
+        expect(shouldRefreshCanvasVirtualization(previous, { x: 360, y: 225, k: 0.5 }, 0, 1000, size)).toBe(true);
+        expect(shouldRefreshCanvasVirtualization(previous, { x: 110, y: 0, k: 1.1 }, 0, 1000, size)).toBe(true);
+    });
     test("refreshes the virtualized node window during continuous viewport movement without committing every wheel event", () => {
         const previous = { x: 0, y: 0, k: 1 };
         const moved = { x: 0, y: -360, k: 1 };

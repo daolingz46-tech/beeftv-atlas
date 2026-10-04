@@ -82,10 +82,14 @@ export function CanvasLeaferGraphicsLayer(props: CanvasLeaferGraphicsLayerProps)
         const overlay = createOverlayScene(overlayHost);
         underlayRef.current = underlay;
         overlayRef.current = overlay;
+        let sceneWidth = 1;
+        let sceneHeight = 1;
 
         const resize = () => {
             const rect = container.getBoundingClientRect();
             const size = { width: Math.max(1, rect.width), height: Math.max(1, rect.height), pixelRatio: canvasPixelRatio() };
+            sceneWidth = size.width;
+            sceneHeight = size.height;
             underlay.leafer.resize(size);
             overlay.leafer.resize(size);
             syncViewport(rasterViewportRef.current, size.width, size.height, underlay, overlay, propsRef.current);
@@ -98,10 +102,9 @@ export function CanvasLeaferGraphicsLayer(props: CanvasLeaferGraphicsLayerProps)
         window.addEventListener("resize", resize);
         const unsubscribe = subscribeCanvasGraphicsViewportPreview(container, (next) => {
             viewportRef.current = next;
-            const rect = container.getBoundingClientRect();
             if (isViewportPreview(container, next, rasterViewportRef.current)) {
                 if (shouldRebaseCanvasRaster(next, rasterViewportRef.current)) {
-                    syncViewport(next, rect.width, rect.height, underlay, overlay, propsRef.current);
+                    syncViewport(next, sceneWidth, sceneHeight, underlay, overlay, propsRef.current);
                     rasterViewportRef.current = next;
                     forceSceneRender(underlay, overlay);
                     resetScenePreview(underlay, overlay);
@@ -112,7 +115,7 @@ export function CanvasLeaferGraphicsLayer(props: CanvasLeaferGraphicsLayerProps)
             }
             resetScenePreview(underlay, overlay);
             if (sameCanvasViewport(next, rasterViewportRef.current)) return;
-            syncViewport(next, rect.width, rect.height, underlay, overlay, propsRef.current);
+            syncViewport(next, sceneWidth, sceneHeight, underlay, overlay, propsRef.current);
             rasterViewportRef.current = next;
         });
         const unsubscribeSelection = subscribeCanvasSelectionPreview(container, (selection) => {
@@ -155,13 +158,14 @@ export function CanvasLeaferGraphicsLayer(props: CanvasLeaferGraphicsLayerProps)
         const overlay = overlayRef.current;
         const container = props.containerRef.current;
         if (!underlay || !overlay || !container) return;
-        viewportRef.current = props.viewport;
+        const next = container.dataset.canvasViewportInteracting === "true" ? viewportRef.current : props.viewport;
+        viewportRef.current = next;
         const rect = container.getBoundingClientRect();
         const hadPreview = hasScenePreview(underlay, overlay);
-        if (hadPreview || !sameCanvasViewport(props.viewport, rasterViewportRef.current)) {
-            syncViewport(props.viewport, rect.width, rect.height, underlay, overlay, props);
+        if (hadPreview || !sameCanvasViewport(next, rasterViewportRef.current)) {
+            syncViewport(next, rect.width, rect.height, underlay, overlay, props);
         }
-        rasterViewportRef.current = props.viewport;
+        rasterViewportRef.current = next;
         // 新视口先同步到真实 DPR backing store，再撤销交互期的合成变换，避免出现跳帧。
         if (hadPreview) forceSceneRender(underlay, overlay);
         resetScenePreview(underlay, overlay);

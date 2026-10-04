@@ -36,7 +36,6 @@ export function useCanvasViewportController({
     setDialogNodeId,
     setToolbarNodeId,
 }: UseCanvasViewportControllerOptions) {
-    const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const renderedViewportRef = useRef(viewportRef.current);
     const lastVirtualizationRefreshAtRef = useRef(0);
 
@@ -47,10 +46,6 @@ export function useCanvasViewportController({
     }, [containerRef, viewportRef]);
 
     const commitViewport = useCallback((next: ViewportTransform) => {
-        if (commitTimerRef.current) {
-            clearTimeout(commitTimerRef.current);
-            commitTimerRef.current = null;
-        }
         viewportRef.current = next;
         renderedViewportRef.current = next;
         lastVirtualizationRefreshAtRef.current = performance.now();
@@ -59,7 +54,6 @@ export function useCanvasViewportController({
     }, [containerRef, setViewport, viewportRef]);
 
     useEffect(() => () => {
-        if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
         delete containerRef.current?.dataset.canvasViewportInteracting;
     }, [containerRef]);
 
@@ -134,13 +128,10 @@ export function useCanvasViewportController({
     }, [nodesRef, selectFocusedNode, setDialogNodeId, setToolbarNodeId, size.height, size.width, transitionViewportTo, viewportRef]);
 
     const setZoomScale = useCallback((scale: number) => {
-        cancelViewportTransition();
         const next = viewportAtScale(viewportRef.current, size, scale);
-        previewViewport(next);
-        if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
-        commitTimerRef.current = setTimeout(() => commitViewport(viewportRef.current), 120);
+        transitionViewportTo(next);
         setContextMenu(null);
-    }, [cancelViewportTransition, commitViewport, previewViewport, setContextMenu, size, viewportRef]);
+    }, [setContextMenu, size, transitionViewportTo, viewportRef]);
 
     const zoomCanvasIn = useCallback(() => setZoomScale(viewportRef.current.k + 0.1), [setZoomScale, viewportRef]);
     const zoomCanvasOut = useCallback(() => setZoomScale(viewportRef.current.k - 0.1), [setZoomScale, viewportRef]);
@@ -159,11 +150,11 @@ export function useCanvasViewportController({
         cancelViewportTransition();
         viewportRef.current = next;
         const now = performance.now();
-        if (!shouldRefreshCanvasVirtualization(renderedViewportRef.current, next, lastVirtualizationRefreshAtRef.current, now)) return;
+        if (!shouldRefreshCanvasVirtualization(renderedViewportRef.current, next, lastVirtualizationRefreshAtRef.current, now, size)) return;
         renderedViewportRef.current = next;
         lastVirtualizationRefreshAtRef.current = now;
         setViewport((current) => current.x === next.x && current.y === next.y && current.k === next.k ? current : next);
-    }, [cancelViewportTransition, setViewport, viewportRef]);
+    }, [cancelViewportTransition, setViewport, size, viewportRef]);
 
     return {
         fitCanvasContent,

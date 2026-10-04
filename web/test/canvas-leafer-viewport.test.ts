@@ -22,13 +22,13 @@ describe("shouldRebaseCanvasRaster", () => {
     const rasterViewport = { x: 100, y: 50, k: 1 };
 
     test("常规缩放复用当前栅格", () => {
-        expect(shouldRebaseCanvasRaster({ x: 90, y: 45, k: 0.85 }, rasterViewport)).toBe(false);
-        expect(shouldRebaseCanvasRaster({ x: 80, y: 40, k: 1.25 }, rasterViewport)).toBe(false);
+        expect(shouldRebaseCanvasRaster({ x: 90, y: 45, k: 0.5 }, rasterViewport)).toBe(false);
+        expect(shouldRebaseCanvasRaster({ x: 80, y: 40, k: 2 }, rasterViewport)).toBe(false);
     });
 
     test("超出缓存阈值时重建栅格基线", () => {
-        expect(shouldRebaseCanvasRaster({ x: 90, y: 45, k: 0.849 }, rasterViewport)).toBe(true);
-        expect(shouldRebaseCanvasRaster({ x: 80, y: 40, k: 1.251 }, rasterViewport)).toBe(true);
+        expect(shouldRebaseCanvasRaster({ x: 90, y: 45, k: 0.499 }, rasterViewport)).toBe(true);
+        expect(shouldRebaseCanvasRaster({ x: 80, y: 40, k: 2.001 }, rasterViewport)).toBe(true);
     });
 });
 
