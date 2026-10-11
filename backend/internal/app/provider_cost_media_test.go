@@ -3,7 +3,10 @@ package app
 import (
 	"bytes"
 	"context"
+	"io"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os/exec"
 	"strings"
 	"testing"
@@ -31,23 +34,54 @@ func TestAtlasNativeImageQuotesUseAccountRatesAndGenerationResolution(t *testing
 }
 
 func TestAtlasBillingImagesKeepPriceDimensionsAndOriginalPixels(t *testing.T) {
+	t.Setenv("CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS", "127.0.0.1")
+	var uploaded []byte
+	uploads := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/model/uploadMedia" || (r.Header.Get("Authorization") != "Bearer synthetic-only" && r.Header.Get("Authorization") != "Bearer another-account") {
+			t.Errorf("unexpected upload request: %s", r.URL.Path)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+		uploaded, err = io.ReadAll(file)
+		if err != nil {
+			t.Error(err)
+		}
+		uploads++
+		_, _ = w.Write([]byte(`{"code":200,"data":{"download_url":"https://example.com/billing.png"}}`))
+	}))
+	defer server.Close()
 	original := atlasQuoteTestImage(t)
 	original.Width, original.Height = 512, 512
-	input := canvasGenerationInput{Config: providerConfig{}, ReferenceImages: []providerMedia{original}}
+	input := canvasGenerationInput{Config: providerConfig{BaseURL: server.URL, APIKey: "synthetic-only"}, ReferenceImages: []providerMedia{original}}
 	prepared, err := (&Service{}).prepareAtlasBillingMedia(context.Background(), "local", input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if input.ReferenceImages[0].DataURL != original.DataURL || len(prepared.ReferenceImages[0].DataURL) >= len(original.DataURL)/10 {
+	if input.ReferenceImages[0].DataURL != original.DataURL || prepared.ReferenceImages[0].DataURL != "" || prepared.ReferenceImages[0].URL != "https://example.com/billing.png" {
 		t.Fatal("quote retained large source image or mutated original")
 	}
-	_, pixels, err := decodeProviderDataURL(prepared.ReferenceImages[0].DataURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	w, h, err := imageHeaderDimensions(bytes.NewReader(pixels))
+	w, h, err := imageHeaderDimensions(bytes.NewReader(uploaded))
 	if err != nil || w != 512 || h != 512 {
 		t.Fatal("billing dimensions changed")
+	}
+	if len(uploaded) >= len(original.DataURL)/10 {
+		t.Fatal("source pixels uploaded instead of blank surrogate")
+	}
+	if _, err := (&Service{}).prepareAtlasBillingMedia(context.Background(), "local", input); err != nil || uploads != 1 {
+		t.Fatalf("repeat quote did not reuse uploaded metadata: uploads=%d err=%v", uploads, err)
+	}
+	input.Config.APIKey = "another-account"
+	// A different account must never receive the cached URL belonging to the first.
+	if _, err := (&Service{}).prepareAtlasBillingMedia(context.Background(), "local", input); err != nil || uploads != 2 {
+		t.Fatalf("cross-account upload was skipped: uploads=%d err=%v", uploads, err)
 	}
 }
 

@@ -102,7 +102,13 @@ func ImageSizeParameter(profile *ImageCapabilityConfig, value string) (string, s
 	}
 	switch profile.Size.Parameter {
 	case "size":
-		return "size", NormalizePixelSize(value)
+		size := NormalizePixelSize(value)
+		// Some Atlas models require width*height. Keep the capability's wire
+		// format instead of rewriting every provider's dimensions to OpenAI's x.
+		if strings.Contains(profile.Size.Default, "*") {
+			size = strings.ReplaceAll(size, "x", "*")
+		}
+		return "size", size
 	case "aspect_ratio":
 		return "aspect_ratio", NormalizeImageAspectRatio(value)
 	default:
@@ -139,7 +145,7 @@ func ImageDimensionGCD(left int, right int) int {
 }
 
 func NormalizePixelSize(value string) string {
-	value = strings.TrimSpace(value)
+	value = strings.ToLower(strings.TrimSpace(strings.NewReplacer("*", "x", "×", "x").Replace(value)))
 	if value == "" || value == "auto" {
 		return ""
 	}

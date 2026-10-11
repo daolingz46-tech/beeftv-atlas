@@ -53,6 +53,12 @@ func TestSeedanceQuoteTransfersOnlyParametersAndIncludesReferenceDuration(t *tes
 }
 
 func TestAtlasQuoteRetriesConnectionFailuresAndShowsSafeReason(t *testing.T) {
+	_, unavailable := atlasQuoteWithRetry(context.Background(), func() ([]byte, error) {
+		return nil, providerHTTPError{StatusCode: 400, Body: `{"code":400,"msg":"not found"}`}
+	})
+	if unavailable == nil || !strings.Contains(unavailable.Error(), "暂未提供该模型的报价") {
+		t.Fatalf("missing provider quote reason: %v", unavailable)
+	}
 	networkFailure := &url.Error{Op: "Post", URL: "https://secret.example.invalid", Err: &net.DNSError{Err: "temporary", Name: "secret.example.invalid", IsTemporary: true}}
 	attempts := 0
 	body, err := atlasQuoteWithRetry(context.Background(), func() ([]byte, error) {

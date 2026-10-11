@@ -1,5 +1,6 @@
 import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
 import type { CanvasConnection, CanvasNodeData } from "@/types/canvas";
+import { canonicalize } from "json-canonicalize";
 
 export type CanvasDocumentRebaseResult = {
     project: CanvasProject;
@@ -18,7 +19,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function equal(left: unknown, right: unknown) {
     if (Object.is(left, right)) return true;
     try {
-        return JSON.stringify(left) === JSON.stringify(right);
+        return canonicalize(left) === canonicalize(right);
     } catch {
         return false;
     }

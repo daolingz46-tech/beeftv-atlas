@@ -9,7 +9,7 @@ import { canvasExternalRevisionVersion, subscribeCanvasExternalRevision, useCanv
 import { canvasSyncProgressKey, useSyncProgressStore } from "@/stores/use-sync-progress-store";
 import { workspaceCapabilities } from "@/services/workspace-mode";
 
-export function CanvasSyncStatus({ projectId, onLoadLatest, onOpenVersions }: { projectId: string; onLoadLatest: () => Promise<void>; onOpenVersions?: () => void }) {
+export function CanvasSyncStatus({ projectId, onLoadLatest, onOpenVersions, onKeepLocalCopy }: { projectId: string; onLoadLatest: () => Promise<void>; onOpenVersions?: () => void; onKeepLocalCopy?: () => Promise<void> }) {
     const { message } = App.useApp();
     const progress = useSyncProgressStore((state) => state.syncingProjects[canvasSyncProgressKey(projectId)]);
     const localOnly = workspaceCapabilities().local;
@@ -21,10 +21,10 @@ export function CanvasSyncStatus({ projectId, onLoadLatest, onOpenVersions }: { 
     const externalConflict = pendingExternalCanvasRevision(projectId);
     const [adopting, setAdopting] = useState(false);
     const phase = progress?.phase;
-    const conflict = phase === "conflict";
+    const conflict = phase === "conflict" || Boolean(externalConflict);
     const failed = phase === "error" || conflict || !phase;
     const saving = phase === "pending" || phase === "saving" || phase === "uploading";
-    const label = localOnly ? "已保存在本地" : conflict ? "版本冲突 · 未同步" : !phase ? "尚未同步" : failed ? "云端未保存" : saving ? "正在保存" : "已保存";
+    const label = conflict ? "版本冲突 · 未保存到数据库" : saving ? "正在保存" : localOnly && phase === "done" ? "已保存在本地" : !phase ? "尚未确认保存" : failed ? "保存失败" : "已保存";
     const run = async (operation: () => Promise<unknown>) => {
         setBusy(true);
         try {
@@ -65,11 +65,12 @@ export function CanvasSyncStatus({ projectId, onLoadLatest, onOpenVersions }: { 
                 content={
                     <div className="max-w-80 space-y-3" data-canvas-no-zoom>
                         <p role="status" className="text-sm">
-                            {localOnly ? "画布已保存在本机。" : progress?.message || (phase === "done" ? "画布已同步到云端" : "尚未确认云端保存，请保留本地内容")}
+                            {conflict ? "本地编辑与数据库版本有冲突，当前内容已保留，自动提交已暂停。" : progress?.message || (phase === "done" ? (localOnly ? "画布已保存在本机数据库。" : "画布已同步到云端") : "尚未确认保存，请保留本地内容")}
                         </p>
-                        {!localOnly && conflict ? <p className="text-xs text-muted-foreground">此画布的自动提交已暂停。加载最新版前会保留本地草稿，可下载后从画布列表导入为副本。</p> : null}
+                        {conflict ? <p className="text-xs text-muted-foreground">保留当前内容为副本，可以继续编辑和生成，同时保留原画布的数据库版本。</p> : null}
                         <div className="flex flex-wrap gap-2">
-                            {!localOnly ? <Button size="small" loading={busy} onClick={() => void run(onLoadLatest)}>加载云端最新版本</Button> : null}
+                            {conflict && onKeepLocalCopy ? <Button size="small" loading={busy} onClick={() => void run(onKeepLocalCopy)}>保留当前内容为副本并继续</Button> : null}
+                            {!localOnly || conflict ? <Button size="small" loading={busy} onClick={() => void run(onLoadLatest)}>加载最新版本</Button> : null}
                             <Button
                                 size="small"
                                 disabled={busy}
@@ -103,9 +104,9 @@ export function CanvasSyncStatus({ projectId, onLoadLatest, onOpenVersions }: { 
                 <Button
                     type="text"
                     size="small"
-                    danger={!localOnly && failed}
+                    danger={failed}
                     aria-label={`画布保存状态：${label}`}
-                    icon={localOnly ? <CheckCircle2 className="size-3.5 text-emerald-500" /> : saving ? <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" /> : failed ? <CloudOff className="size-3.5" /> : <CloudCheck className="size-3.5" />}
+                    icon={saving ? <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" /> : failed ? <CloudOff className="size-3.5" /> : localOnly ? <CheckCircle2 className="size-3.5 text-emerald-500" /> : <CloudCheck className="size-3.5" />}
                 >
                     <span className="canvas-sync-status-label text-xs">{label}</span>
                 </Button>

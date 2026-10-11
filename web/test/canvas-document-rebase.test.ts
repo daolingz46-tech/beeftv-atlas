@@ -29,6 +29,15 @@ function project(nodes: CanvasNodeData[], revision: number, title = "画布"): C
 }
 
 describe("settleInFlightGenerationOverlay", () => {
+    test("对象字段顺序变化不制造冲突，也不复活数据库已删除的节点", () => {
+        const original = node("original", "原图", { content: "old", storageKey: "resource:old" });
+        const base = project([original], 1);
+        const local = project([{ ...original, metadata: { storageKey: "resource:old", content: "old" } }], 1);
+        const remote = project([], 2);
+        const rebased = rebaseCanvasDocumentThreeWay({ base, local, remote });
+        expect(rebased.conflict).toBe(false);
+        expect(rebased.project.nodes).toEqual([]);
+    });
     test("settle comment matches overlay empty-string exception", () => {
         const source = readFileSync(resolve(import.meta.dir, "../src/lib/canvas/canvas-document-rebase.ts"), "utf8");
         expect(source).not.toContain("人类写过的 content（含空串）保留");

@@ -37,6 +37,7 @@ class ApiError extends Error {
 }
 
 const server = {
+    history: [] as Array<{ id: string; canvasId: string; revision: number; project: Record<string, unknown> }>,
     missingCreateReceipt: false,
     revision: 1,
     document: null as Record<string, unknown> | null,
@@ -100,6 +101,11 @@ mock.module("@/services/api/request", () => ({
                 server.dispatchWaiting = false;
             }
             assertMockExpectedScope(config);
+            if (_path.endsWith("/history")) return { snapshots: server.history.map(({ project: _project, ...entry }) => entry) };
+            if (_path.includes("/history/")) {
+                const entry = server.history.find((item) => _path.endsWith(`/${item.id}`));
+                return entry ? { snapshot: entry, project: entry.project } : {};
+            }
             return { project: server.document };
         },
         put: async (_path: string, _body: unknown, config?: { expectedScope?: { userScope: string; epoch: number } }) => {
@@ -311,6 +317,7 @@ beforeEach(() => {
     failSetItemOn = 0;
     setItemCount = 0;
     server.revision = 1;
+    server.history = [];
     server.missingCreateReceipt = false;
     server.document = canvas("基线", 1);
     server.commits = [];
@@ -333,6 +340,64 @@ beforeEach(() => {
 });
 
 describe("画布文档提交日记", () => {
+    test("升级前缺失保存日记：从同画布历史恢复基线，合并草稿后按当前 revision 保存", async () => {
+        const base = canvas("历史基线", 1, { nodes: [node("original", "原图")] });
+        const local = canvas("历史基线", 2, { nodes: [node("original", "原图"), node("local", "新拖入的图")] });
+        server.document = canvas("历史基线", 3, { nodes: [node("original", "原图"), node("remote", "数据库产物")] });
+        server.revision = 3;
+        server.history = [{ id: "history-1", canvasId: "c1", revision: 1, project: base }];
+        clearCanvasDocumentBase("c1");
+        useCanvasStore.setState({ projects: [local] });
+        const opened = await openLocalCanvasProjectFromBackend("c1");
+        expect(opened?.nodes.map((item) => item.id).sort()).toEqual(["local", "original", "remote"]);
+        expect(canvasBackendSubmitPaused("c1")).toBe(false);
+        await syncLocalCanvasProjectToBackend("c1");
+        expect(server.commits.at(-1)?.expectedRevision).toBe(3);
+        expect(server.commits.at(-1)?.nodeIds?.sort()).toEqual(["local", "original", "remote"]);
+    });
+
+    test("真实删除与移动冲突不能被自动确认，重启后仍保留草稿并暂停提交", async () => {
+        const base = canvas("基线", 1, { nodes: [node("original", "原图")] });
+        const local = canvas("基线", 2, { nodes: [node("original", "原图", { position: { x: 90, y: 10 } })] });
+        server.document = canvas("基线", 3);
+        server.history = [{ id: "history-1", canvasId: "c1", revision: 1, project: base }];
+        clearCanvasDocumentBase("c1");
+        useCanvasStore.setState({ projects: [local] });
+        await openLocalCanvasProjectFromBackend("c1");
+        expect(canvasBackendSubmitPaused("c1")).toBe(true);
+        expect(useCanvasStore.getState().openProject("c1")?.nodes[0]?.position.x).toBe(90);
+        expect(peekCanvasOperationJournal("c1")?.confirmedRevision).toBe(1);
+        resetCanvasOperationJournalMemory();
+        clearCanvasDocumentBase("c1");
+        clearCanvasExternalRevisionConflict("guest", "c1");
+        await openLocalCanvasProjectFromBackend("c1");
+        await expect(syncLocalCanvasProjectToBackend("c1")).rejects.toBeInstanceOf(CanvasBackendSubmitPausedError);
+        expect(server.commits).toHaveLength(0);
+        expect(useCanvasStore.getState().openProject("c1")?.nodes).toHaveLength(1);
+    });
+
+    test("已有保存基线时打开画布应合并不同字段的改动，不把所有差异当成版本冲突", async () => {
+        const base = canvas("基线", 1, { nodes: [node("original", "原图")] });
+        await seedConfirmed(base);
+        useCanvasStore.setState({ projects: [canvas("基线", 1, { nodes: [node("original", "本地标题")] })] });
+        server.document = canvas("基线", 2, { nodes: [node("original", "原图", { metadata: { content: "https://example.com/result.png" } })] });
+        const opened = await openLocalCanvasProjectFromBackend("c1");
+        expect(opened?.nodes[0]?.title).toBe("本地标题");
+        expect(opened?.nodes[0]?.metadata?.content).toBe("https://example.com/result.png");
+        expect(canvasBackendSubmitPaused("c1")).toBe(false);
+    });
+
+    test("历史响应的画布身份不匹配时不采用基线、不提交旧草稿", async () => {
+        clearCanvasDocumentBase("c1");
+        useCanvasStore.setState({ projects: [canvas("草稿", 2)] });
+        server.document = canvas("数据库版本", 3);
+        server.history = [{ id: "bad-history", canvasId: "c1", revision: 1, project: { ...canvas("其他画布", 1), id: "other" } }];
+        await openLocalCanvasProjectFromBackend("c1");
+        expect(peekCanvasOperationJournal("c1")?.confirmedRevision).toBe(0);
+        await expect(syncLocalCanvasProjectToBackend("c1")).rejects.toBeInstanceOf(CanvasBackendSubmitPausedError);
+        expect(server.commits).toHaveLength(0);
+    });
+
     test("revision 76 confirmed graph survives cache projection, restart and revision 77 ordinary save", async () => {
         await useCanvasStore.persist.rehydrate();
         const nodes = Array.from({ length: 10 }, (_, index) => node(`n${index}`, `Node ${index}`));

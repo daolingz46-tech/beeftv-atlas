@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import { ownedResourceIdFromMediaRef } from "@/services/api/resources";
 import { apiClient, configureApiRuntime } from "@/services/api/request";
-import { copyOwnedMediaToClipboard, downloadOwnedOrBrowserMedia, isWailsNativeShell, reportOwnedMediaSave, saveOwnedOrBrowserBlob, saveOwnedOrBrowserVideoBlob } from "@/services/desktop-media-save";
+import { copyOwnedMediaToClipboard, copyOwnedMediaFilesToClipboard, downloadOwnedOrBrowserMedia, isWailsNativeShell, reportOwnedMediaSave, saveOwnedOrBrowserBlob, saveOwnedOrBrowserVideoBlob } from "@/services/desktop-media-save";
 import { sanitizeDownloadFileName } from "@/lib/canvas/canvas-media-download";
 import { getActiveUserScope, setActiveUserScope } from "@/lib/user-scope";
 import { captureUserScope, UserScopeAbandonedError } from "@/lib/user-scope-guard";
@@ -24,6 +24,18 @@ afterEach(() => {
 });
 
 describe("native media save", () => {
+    test("copies ten images and a video in one native operation and rejects incomplete selections", async () => {
+        const calls: Array<[string[], string[]]> = [];
+        Object.assign(globalThis, { window: { go: { main: { DesktopApp: { CopyOwnedMediaFiles: async (names: string[], ids: string[]) => { calls.push([names, ids]); } } } } } });
+        const files = [...Array.from({ length: 10 }, (_, i) => ({ fileName: `../图片${i}.png`, resourceId: ` image${i} ` })), { fileName: "视频.mp4", resourceId: "video" }];
+        await copyOwnedMediaFilesToClipboard(files);
+        expect(calls).toHaveLength(1);
+        expect(calls[0][0]).toHaveLength(11);
+        expect(calls[0][1]).toEqual([...Array.from({ length: 10 }, (_, i) => `image${i}`), "video"]);
+        expect(calls[0][0][0]).toBe("图片0.png");
+        await expect(copyOwnedMediaFilesToClipboard([...files, { fileName: "missing.png" }])).rejects.toThrow("尚未保存");
+        expect(calls).toHaveLength(1);
+    });
     test("copies owned media through the native clipboard binding with a safe file name", async () => {
         const calls: Array<[string, string]> = [];
         Object.assign(globalThis, { window: { go: { main: { DesktopApp: { CopyOwnedMedia: async (name: string, id: string) => { calls.push([name, id]); } } } } } });

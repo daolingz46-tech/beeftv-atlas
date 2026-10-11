@@ -28,17 +28,19 @@ function Harness() {
     const [config, setConfig] = useState(initial);
     const [changes, setChanges] = useState<Array<{ key: DefaultModelKey; value: string }>>([]);
     const [dark, setDark] = useState(true);
+    const [showSettings, setShowSettings] = useState(true);
     return (
         <ConfigProvider theme={{ algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm }}>
             <main style={{ maxWidth: 1200, margin: "auto", padding: 24, color: dark ? "#eee" : "#222", background: dark ? "#111" : "#fff" }}>
                 <h2>默认模型</h2>
-                <ModelDefaultGrid
+                {showSettings ? <ModelDefaultGrid
                     config={config}
                     onChange={(key, value) => {
                         setConfig((current) => ({ ...current, [key]: value }));
                         setChanges((current) => [...current, { key, value }]);
                     }}
-                />
+                /> : <p>项目页</p>}
+                <button onClick={() => setShowSettings(!showSettings)}>切换项目页面</button>
                 <button onClick={() => setConfig((current) => ({ ...current, imageModel: "a::seedream-5.0" }))}>外部更新图片默认模型</button>
                 <button onClick={() => setConfig((current) => ({ ...current, assistantModel: "gone::gpt-6" }))}>助手选择失效</button>
                 <button onClick={() => setDark(!dark)}>切换主题</button>

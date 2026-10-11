@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import { CachedResourceImage } from "@/components/cached-resource-image";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { isFrameNode, isNodeHiddenByCollapsedFrame } from "@/lib/canvas/canvas-frame";
+import { isHiddenBatchChild } from "@/lib/canvas/canvas-project-domain";
 import { buildLibTVImagePreviewUrl } from "@/lib/canvas/libtv-import";
 import { getNodeLabel } from "@/lib/canvas/node-registry/node-registry";
 import { subscribeCanvasViewportPreview } from "@/lib/canvas/canvas-live-viewport";
@@ -21,8 +22,7 @@ export function Minimap({ nodes, viewport, viewportSize, canvasContainerRef, onV
     const [isDragging, setIsDragging] = useState(false);
     const width = MINIMAP_WIDTH;
     const height = MINIMAP_HEIGHT;
-    const displayNodes = useMemo(() => nodes.filter((node) => !isNodeHiddenByCollapsedFrame(node, nodes)), [nodes]);
-    const showImagePreviews = useMemo(() => displayNodes.filter((node) => node.type === CanvasNodeType.Image && Boolean(getImagePreviewSource(node) || node.metadata?.storageKey)).length <= MINIMAP_IMAGE_PREVIEW_LIMIT, [displayNodes]);
+    const displayNodes = useMemo(() => nodes.filter((node) => !isNodeHiddenByCollapsedFrame(node, nodes) && !isHiddenBatchChild(node, nodes)), [nodes]);
 
     const { worldBounds, scale, offset } = useMemo(() => {
         if (!displayNodes.length) {
@@ -58,6 +58,14 @@ export function Minimap({ nodes, viewport, viewportSize, canvasContainerRef, onV
             offset: { x: (width - mapContentW) / 2, y: (height - mapContentH) / 2 },
         };
     }, [displayNodes]);
+
+    // Keep a bounded set of useful previews even on large canvases. Tiny nodes
+    // use their type color rather than downloading an invisible full image.
+    const imagePreviewIds = useMemo(() => new Set(displayNodes
+        .filter(node => node.type === CanvasNodeType.Image && Boolean(getImagePreviewSource(node) || node.metadata?.storageKey)
+            && node.width * scale >= 8 && node.height * scale >= 8)
+        .sort((a, b) => b.width * b.height - a.width * a.height)
+        .slice(0, MINIMAP_IMAGE_PREVIEW_LIMIT).map(node => node.id)), [displayNodes, scale]);
 
     const toMinimap = useCallback(
         (worldX: number, worldY: number) => {
@@ -165,11 +173,15 @@ export function Minimap({ nodes, viewport, viewportSize, canvasContainerRef, onV
                     const pos = toMinimap(node.position.x, node.position.y);
                     const frame = isFrameNode(node);
                     const color = node.type === CanvasNodeType.Image ? "#10b981" : node.type === CanvasNodeType.Video ? "#f97316" : node.type === CanvasNodeType.Audio ? "#a855f7" : node.type === CanvasNodeType.Config ? "#60a5fa" : node.type === CanvasNodeType.Skill ? "#818cf8" : frame ? theme.frame.stroke : theme.node.muted;
-                    const imagePreviewSource = showImagePreviews && node.type === CanvasNodeType.Image ? getImagePreviewSource(node) : "";
+                    const showImagePreview = imagePreviewIds.has(node.id);
+                    const imagePreviewSource = showImagePreview ? getImagePreviewSource(node) : "";
                     const nodeLabel = node.title?.trim() || getNodeLabel(node.type);
                     return (
                         <div
                             key={node.id}
+                            title={nodeLabel}
+                            aria-label={nodeLabel}
+                            data-minimap-node={node.id}
                             className="absolute rounded-[1px]"
                             style={{
                                 left: pos.x,
@@ -182,7 +194,7 @@ export function Minimap({ nodes, viewport, viewportSize, canvasContainerRef, onV
                             }}
                         >
                             <div className="absolute inset-0 overflow-hidden rounded-[1px]">
-                                {imagePreviewSource || (showImagePreviews && node.type === CanvasNodeType.Image && node.metadata?.storageKey) ? (
+                                {imagePreviewSource || (showImagePreview && node.metadata?.storageKey) ? (
                                     <CachedResourceImage
                                         storageKey={node.metadata?.storageKey}
                                         src={imagePreviewSource}
@@ -195,14 +207,14 @@ export function Minimap({ nodes, viewport, viewportSize, canvasContainerRef, onV
                                     />
                                 ) : null}
                             </div>
-                            <span
+                            {node.width * scale >= 64 && node.height * scale >= 32 ? <span
                                 title={nodeLabel}
                                 aria-label={nodeLabel}
-                                className="pointer-events-none absolute left-0 top-0 z-[1] max-w-[7.5rem] -translate-y-1/2 truncate whitespace-nowrap rounded-[2px] border px-1 py-px text-[9px] font-medium leading-[1.15] shadow-sm"
+                                className="pointer-events-none absolute inset-x-0 bottom-0 z-[1] truncate whitespace-nowrap rounded-[2px] border px-1 py-px text-[9px] font-medium leading-[1.15] shadow-sm"
                                 style={{ color: theme.node.text, background: theme.toolbar.panel, borderColor: theme.toolbar.border }}
                             >
                                 {nodeLabel}
-                            </span>
+                            </span> : null}
                         </div>
                     );
                 })}

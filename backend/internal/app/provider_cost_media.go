@@ -216,15 +216,22 @@ func (s *Service) prepareAtlasBillingImage(ctx context.Context, userID string, m
 	}
 	media.URL, media.DataURL = "", dataURL("image/png", body.Bytes())
 	media.Type, media.MimeType = "image/png", "image/png"
+	// Atlas's pricing probe accepts public URLs, unlike generateImage which also
+	// accepts data URLs. Upload only the blank dimension surrogate, never pixels.
+	url, err := atlasBillingMediaURL(ctx, input.Config, *media, "image")
+	if err != nil {
+		return err
+	}
+	media.URL, media.DataURL = url, ""
 	return nil
 }
 
 func atlasBillingMediaURL(ctx context.Context, config providerConfig, media providerMedia, kind string) (string, error) {
-	if media.DurationMs <= 0 || media.DurationMs > 3600000 {
+	if kind != "image" && (media.DurationMs <= 0 || media.DurationMs > 3600000) {
 		return "", BadAuthRequest("参考素材时长未识别或超过一小时，请重新导入后估价")
 	}
-	if kind == "video" && (media.Width <= 0 || media.Height <= 0 || int64(media.Width)*int64(media.Height) > 32*1024*1024) {
-		return "", BadAuthRequest("参考视频尺寸未识别，请重新导入视频后估价")
+	if (kind == "video" || kind == "image") && (media.Width <= 0 || media.Height <= 0 || int64(media.Width)*int64(media.Height) > 32*1024*1024) {
+		return "", BadAuthRequest("参考素材尺寸未识别，请重新导入后估价")
 	}
 	cacheKey := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%dx%d", config.BaseURL, config.APIKey, kind, media.DurationMs, media.Width, media.Height)))
 	atlasBillingMediaCache.Lock()
@@ -233,13 +240,21 @@ func atlasBillingMediaURL(ctx context.Context, config providerConfig, media prov
 	if exists && time.Now().Before(cached.expires) {
 		return cached.url, nil
 	}
-	clip, err := atlasBillingClip(ctx, media, kind)
+	var clip []byte
+	var err error
+	if kind == "image" {
+		_, clip, err = decodeProviderDataURL(media.DataURL)
+	} else {
+		clip, err = atlasBillingClip(ctx, media, kind)
+	}
 	if err != nil {
 		return "", err
 	}
 	mime, extension := "video/mp4", ".mp4"
 	if kind == "audio" {
 		mime, extension = "audio/wav", ".wav"
+	} else if kind == "image" {
+		mime, extension = "image/png", ".png"
 	}
 	spec := protocol.RequestSpec{Method: http.MethodPost, Path: "/api/v1/model/uploadMedia", OriginPath: true, ContentType: "multipart/form-data", Auth: protocol.ManifestAuth{Type: "bearer", Field: "apiKey"}, Files: []protocol.RequestFilePart{{Name: "file", Filename: "billing-metadata" + extension, MIMEType: mime, Reference: protocol.MediaReference{DataURL: dataURL(mime, clip), Kind: kind}}}}
 	body, err := executeProtocolRequest(ctx, config, spec)

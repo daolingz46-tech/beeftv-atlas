@@ -6,6 +6,7 @@ import { assistantModelOptions, normalizeAssistantModel } from "@/lib/assistant-
 import { groupModelsByDisplayName, groupModelsByFamily } from "@/lib/model-selection";
 import { filterModelsByCapability, isBuiltinBeefAPIChannel, modelDisplayName, resolveModelChannel, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 import { workspaceCapabilities } from "@/services/workspace-mode";
+import { getActiveUserScope, scopedLocalStorage } from "@/lib/user-scope";
 
 export type DefaultModelKey = "imageModel" | "videoModel" | "textModel" | "audioModel" | "assistantModel";
 
@@ -38,7 +39,7 @@ export function ModelDefaultGrid({ config, onChange, onOpenChannels }: { config:
     return (
         <div className="model-default-settings">
             {rows.map((row) => (
-                <DefaultModelRow key={row.id} row={row} config={config} onChange={onChange} onOpenChannels={onOpenChannels} />
+                <DefaultModelRow key={`${getActiveUserScope()}:${row.id}`} row={row} config={config} onChange={onChange} onOpenChannels={onOpenChannels} />
             ))}
         </div>
     );
@@ -82,12 +83,29 @@ function DefaultModelRow({ row, config, onChange, onOpenChannels }: { row: Capab
         ),
     );
     const anchor = isAssistant && !config.assistantModel ? `follow:${config.textModel}` : config[row.modelKey];
-    const [filter, setFilter] = useState<{ anchor: string; channel: string; family: string } | null>(null);
+    const preferenceKey = `infinite-canvas:default-model-filter:${row.id}`;
+    const preferenceScope = getActiveUserScope();
+    const [filter, setFilter] = useState<{ anchor: string; channel: string; family: string } | null>(() => {
+        try {
+            const stored = JSON.parse(scopedLocalStorage.getItem(preferenceKey) || "null");
+            return stored && [stored.anchor, stored.channel, stored.family].every((value) => typeof value === "string") ? stored : null;
+        } catch {
+            return null;
+        }
+    });
     const currentOption = allOptions.find((option) => option.value === (selected || (isAssistant && !config.assistantModel ? config.textModel : "")));
     const activeFilter = filter?.anchor === anchor ? filter : { channel: currentOption?.channelId || "", family: currentOption?.family || "" };
     const channelValue = channels.some((channel) => channel.key === activeFilter.channel) ? activeFilter.channel : "";
     const families = Array.from(new Set(allOptions.filter((option) => !channelValue || option.channelId === channelValue).map((option) => option.family)));
     const familyValue = families.includes(activeFilter.family) ? activeFilter.family : "";
+    const saveFilter = (channel: string, family: string) => {
+        if (getActiveUserScope() !== preferenceScope) return;
+        const next = { anchor, channel, family };
+        // Save at selection time so navigating immediately cannot discard it.
+        // Startup hydration must not overwrite preferences with interim defaults.
+        scopedLocalStorage.setItem(preferenceKey, JSON.stringify(next));
+        setFilter(next);
+    };
     const options = allOptions.filter((option) => (!channelValue || option.channelId === channelValue) && (!familyValue || option.family === familyValue));
     if (isAssistant) options.unshift({ value: "", label: "跟随默认文本模型", searchLabel: "跟随默认文本模型", channel: "", channelId: "", family: "" });
     const unavailable = isAssistant ? Boolean(config.assistantModel && !selected) : Boolean(selected && !allOptions.some((option) => option.value === selected));
@@ -111,7 +129,7 @@ function DefaultModelRow({ row, config, onChange, onOpenChannels }: { row: Capab
                             options={[{ value: "", label: "全部渠道" }, ...channels.map((channel) => ({ value: channel.key, label: channel.label }))]}
                             disabled={!channels.length}
                             showSearch={{ optionFilterProp: "label" }}
-                            onChange={(channel) => setFilter({ anchor, channel, family: "" })}
+                            onChange={(channel) => saveFilter(channel, "")}
                         />
                     </label>
                     <label className="model-default-filter">
@@ -123,7 +141,7 @@ function DefaultModelRow({ row, config, onChange, onOpenChannels }: { row: Capab
                             options={[{ value: "", label: "全部系列" }, ...families.map((family) => ({ value: family, label: family }))]}
                             disabled={!families.length}
                             showSearch={{ optionFilterProp: "label" }}
-                            onChange={(family) => setFilter({ anchor, channel: channelValue, family })}
+                            onChange={(family) => saveFilter(channelValue, family)}
                         />
                     </label>
                 </div>
@@ -147,6 +165,9 @@ function DefaultModelRow({ row, config, onChange, onOpenChannels }: { row: Capab
                     )}
                     onChange={(model) => onChange(row.modelKey, model)}
                 />
+                {currentOption && !options.some(option => option.value === currentOption.value) ? (
+                    <p className="text-xs text-muted-foreground" role="status">当前默认仍为 {currentOption.channel} · {currentOption.label}；从模型列表选择具体模型后才会更换渠道。</p>
+                ) : null}
                 {empty && localMode && onOpenChannels ? (
                     <Button type="link" size="small" onClick={onOpenChannels}>
                         添加模型渠道

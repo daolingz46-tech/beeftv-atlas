@@ -42,6 +42,7 @@ type CanvasProjectContextMenuProps = {
     onToggleFrame: (node: CanvasNodeData) => void;
     onSpreadSelection: () => void;
     onCopySelection: () => void;
+    onCopySelectedMedia: () => void;
     onDeleteSelection: () => void;
 };
 
@@ -115,6 +116,7 @@ export function CanvasProjectContextMenu({ menu, node, screenToCanvas, ...props 
             }}
             onSpreadSelection={props.onSpreadSelection}
             onCopySelection={props.onCopySelection}
+            onCopySelectedMedia={props.onCopySelectedMedia}
             onDeleteSelection={props.onDeleteSelection}
         />
     );

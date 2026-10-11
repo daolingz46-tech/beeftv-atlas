@@ -125,7 +125,12 @@ func TestAtlasCostLive(t *testing.T) {
 			input.Config.VideoSeconds = fmt.Sprint(profile.Capability.Video.Duration.Default)
 			input.Metadata = map[string]interface{}{"videoEditOperation": "text_to_video"}
 		}
-		if profile.Model == "openai/gpt-image-2/edit" {
+		if mode == "image" && profile.Capability != nil && profile.Capability.Image != nil {
+			for i := 0; i < profile.Capability.Image.References.MinImages; i++ {
+				input.ReferenceImages = append(input.ReferenceImages, atlasQuoteTestImage(t))
+			}
+		}
+		if mode == "image" && strings.HasSuffix(profile.Model, "/edit") && len(input.ReferenceImages) == 0 {
 			input.ReferenceImages = []providerMedia{atlasQuoteTestImage(t)}
 		}
 		raw, _ := json.Marshal(input)
@@ -162,7 +167,7 @@ func TestAtlasCostLive(t *testing.T) {
 		started := time.Now()
 		quote, err := service.EstimateGenerationCost(context.Background(), "local", raw)
 		if err != nil {
-			t.Fatalf("free quote for %s: %v", profile.Model, err)
+			t.Fatalf("free quote for %s: %v (cause: %v)", profile.Model, err, errors.Unwrap(err))
 		}
 		if quote.Price <= 0 || quote.Currency != "USD" {
 			t.Fatalf("invalid quote for %s", profile.Model)
@@ -181,12 +186,32 @@ func TestAtlasCostLive(t *testing.T) {
 			compactTime := time.Since(started)
 			ctx := withProtocolRegistry(context.Background(), registry)
 			adapter, _ := declarativeProtocolAdapterForContext(ctx, profile.Protocol)
-			spec, err := adapter.BuildCreate(ctx, protocol.RequestContext{BaseURL: input.Config.BaseURL, Request: protocolRequestFromInput(input)})
+			// Compare the same pricing endpoint and URL transport. The legacy
+			// /model/calculate endpoint has different billing rules and accepts
+			// data URLs that /pricing/calculate's image probe rejects.
+			upload, err := executeProtocolRequest(ctx, input.Config, protocol.RequestSpec{Method: "POST", Path: "/api/v1/model/uploadMedia", OriginPath: true, ContentType: "multipart/form-data", Auth: protocol.ManifestAuth{Type: "bearer", Field: "apiKey"}, Files: []protocol.RequestFilePart{{Name: "file", Filename: "synthetic-quote-comparison.png", MIMEType: "image/png", Reference: protocol.MediaReference{DataURL: input.ReferenceImages[0].DataURL, Kind: "image"}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var uploaded struct {
+				Data struct {
+					URL string `json:"download_url"`
+				} `json:"data"`
+			}
+			if json.Unmarshal(upload, &uploaded) != nil || uploaded.Data.URL == "" {
+				t.Fatal("synthetic upload missing URL")
+			}
+			originalInput := input
+			originalInput.ReferenceImages = append([]providerMedia(nil), input.ReferenceImages...)
+			originalInput.ReferenceImages[0].URL, originalInput.ReferenceImages[0].DataURL = uploaded.Data.URL, ""
+			spec, err := adapter.BuildCreate(ctx, protocol.RequestContext{BaseURL: input.Config.BaseURL, Request: protocolRequestFromInput(originalInput)})
 			if err != nil {
 				t.Fatal(err)
 			}
 			started = time.Now()
-			originalBody, err := executeProtocolRequest(ctx, input.Config, atlasCostRequest(spec))
+			spec = atlasCostRequest(spec)
+			spec.Path = "/api/v1/pricing/calculate"
+			originalBody, err := executeProtocolRequest(ctx, input.Config, spec)
 			if err != nil {
 				t.Fatal(err)
 			}

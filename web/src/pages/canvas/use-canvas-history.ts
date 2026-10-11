@@ -161,12 +161,25 @@ export function useCanvasHistory({
     }, [createHistorySnapshot]);
 
     const undoCanvas = useCallback(() => {
+        // A gesture is committed to React immediately, while history is debounced.
+        // Ctrl+Z right after releasing Alt must include that just-created copy.
+        if (historyCommitTimerRef.current) {
+            clearCommitTimer();
+            const previous = lastHistoryRef.current;
+            const next = createHistorySnapshot();
+            const pending = previous && createCanvasHistoryPatch(previous, next);
+            lastHistoryRef.current = next;
+            if (pending) {
+                historyRef.current.past = [...historyRef.current.past.slice(-49), pending];
+                historyRef.current.future = [];
+            }
+        }
         const patch = historyRef.current.past.pop();
         const current = lastHistoryRef.current;
         if (!patch || !current) return;
         historyRef.current.future.push(patch);
         applyHistorySnapshot(applyCanvasHistoryPatch(current, patch, "before"));
-    }, [applyHistorySnapshot]);
+    }, [applyHistorySnapshot, clearCommitTimer, createHistorySnapshot]);
 
     const redoCanvas = useCallback(() => {
         const patch = historyRef.current.future.pop();

@@ -31,6 +31,49 @@ const nodeDragPreviewDomStates = new WeakMap<HTMLDivElement, NodeDragPreviewDomS
 const nodeSelectionPreviewDomStates = new WeakMap<HTMLDivElement, NodeSelectionPreviewDomState>();
 const liveViewportElements = new WeakMap<HTMLDivElement, { worldLayer: HTMLElement | null }>();
 
+/** A transient copy follows the pointer; originals and document stay untouched until release. */
+export function createCanvasNodeCopyPreview(container: HTMLDivElement | null, nodeIds: ReadonlySet<string>) {
+    const copies: HTMLElement[] = [];
+    container?.querySelectorAll<HTMLElement>("[data-node-id]").forEach((source) => {
+        if (!nodeIds.has(source.dataset.nodeId || "")) return;
+        const copy = source.cloneNode(true) as HTMLElement;
+        copy.removeAttribute("data-node-id");
+        copy.dataset.canvasCopyPreview = "true";
+        copy.setAttribute("aria-hidden", "true");
+        copy.inert = true;
+        copy.style.pointerEvents = "none";
+        copy.style.zIndex = "2147483646";
+        [copy, ...copy.querySelectorAll<HTMLElement>("[id], [data-node-id]")].forEach((element) => {
+            element.removeAttribute("id");
+            element.removeAttribute("data-node-id");
+        });
+        const sourceCanvases = source.querySelectorAll("canvas");
+        copy.querySelectorAll("canvas").forEach((canvas, index) => {
+            try { canvas.getContext("2d")?.drawImage(sourceCanvases[index], 0, 0); } catch { /* GPU canvas may not expose pixels. */ }
+        });
+        const sourceVideos = source.querySelectorAll("video");
+        copy.querySelectorAll("video").forEach((video, index) => {
+            const original = sourceVideos[index];
+            if (!original?.videoWidth || original.readyState < 2) return;
+            const frame = document.createElement("canvas");
+            frame.width = original.videoWidth;
+            frame.height = original.videoHeight;
+            frame.className = video.className;
+            frame.style.cssText = video.style.cssText;
+            try {
+                frame.getContext("2d")?.drawImage(original, 0, 0);
+                video.replaceWith(frame);
+            } catch { /* Preserve the cloned poster if the frame is unavailable. */ }
+        });
+        source.parentElement?.appendChild(copy);
+        copies.push(copy);
+    });
+    return {
+        move: ({ x, y }: { x: number; y: number }) => copies.forEach((copy) => { copy.style.translate = `${x}px ${y}px`; }),
+        dispose: () => copies.forEach((copy) => copy.remove()),
+    };
+}
+
 export function applyCanvasLiveViewport(container: HTMLDivElement | null, viewport: ViewportTransform, notify = true) {
     if (!container) return;
     const committedScale = Number(container.style.getPropertyValue("--canvas-committed-scale")) || viewport.k;

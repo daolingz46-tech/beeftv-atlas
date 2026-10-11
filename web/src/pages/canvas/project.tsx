@@ -21,7 +21,7 @@ import { isCanvasImageSourceNode } from "@/lib/canvas/canvas-image-source";
 import { canOpenCanvasNodePromptPanel, isCanvasMediaResultNode } from "@/lib/canvas/canvas-node-semantics";
 import copyToClipboard from "copy-to-clipboard";
 import { canvasMediaFileExtension } from "@/lib/canvas/canvas-media-download";
-import { copyOwnedMediaToClipboard } from "@/services/desktop-media-save";
+import { copyOwnedMediaToClipboard, copyOwnedMediaFilesToClipboard } from "@/services/desktop-media-save";
 import { nanoid } from "nanoid";
 import { canvasAppearanceBaseTheme, canvasAppearanceForTheme, DEFAULT_CANVAS_BACKGROUND_MODE, normalizeCanvasAppearance, resolveCanvasAppearance, writeCanvasAppearanceDefault, type CanvasAppearance } from "@/lib/canvas/canvas-appearance";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
@@ -1259,6 +1259,7 @@ function InfiniteCanvasPage() {
         deleteConnection,
         deleteNodes,
         duplicateNode,
+        duplicateNodesAtOffset,
         hasCopiedNodes,
         pasteCopiedNodes,
         restoreCopiedNodesFromText,
@@ -1505,6 +1506,7 @@ function InfiniteCanvasPage() {
         onNodeBringToFront: handleNodeBringToFront,
         onNodeClick: handleSelectedNodeClick,
         onNodeDragEnd: handleNodeDragEnd,
+        onDuplicateDrag: duplicateNodesAtOffset,
         onBatchConnectionTarget: handleBatchConnectionTargetClick,
         onLinkedFolderDrop: archiveNodesToLinkedFolder,
         onDeselect: handleCanvasDeselect,
@@ -1943,6 +1945,26 @@ function InfiniteCanvasPage() {
     );
 
     const copyingNodeContentRef = useRef(false);
+    const copySelectedMediaFiles = useCallback(async () => {
+        if (copyingNodeContentRef.current) return;
+        const media = nodesRef.current.filter(node => selectedNodeIdsRef.current.has(node.id) &&
+            (node.type === CanvasNodeType.Image || node.type === CanvasNodeType.Video) &&
+            Boolean(node.metadata?.content || node.metadata?.storageKey));
+        if (!media.length) { message.warning("选区中没有可复制的图片或视频"); return; }
+        copyingNodeContentRef.current = true;
+        const feedbackKey = "copy-selected-media";
+        message.loading({ content: `正在准备 ${media.length} 个媒体文件…`, key: feedbackKey, duration: 0 });
+        try {
+            await copyOwnedMediaFilesToClipboard(media.map(node => ({
+                fileName: `${node.title || (node.type === CanvasNodeType.Image ? "图片" : "视频")}.${canvasMediaFileExtension(node)}`,
+                resourceId: resourceIdFromStorageKey(node.metadata?.storageKey),
+            })));
+            releaseCopiedNodesPastePriority();
+            message.success({ content: `已复制 ${media.length} 个图片/视频文件，可以到微信粘贴`, key: feedbackKey });
+        } catch (error) {
+            message.error({ content: error instanceof Error ? error.message : "媒体文件复制失败", key: feedbackKey });
+        } finally { copyingNodeContentRef.current = false; }
+    }, [message, nodesRef, selectedNodeIdsRef, releaseCopiedNodesPastePriority]);
     const copyNodeContentToClipboard = useCallback(
         async (node: CanvasNodeData | null) => {
             if (copyingNodeContentRef.current) return;
@@ -2507,7 +2529,7 @@ function InfiniteCanvasPage() {
                                         setScriptEditorNodeId(null);
                                     }
                                 }}
-                                syncStatus={<CanvasSyncStatus projectId={projectId} onLoadLatest={reloadLatestCanvasProject} onOpenVersions={openVersions} />}
+                                syncStatus={<CanvasSyncStatus projectId={projectId} onLoadLatest={reloadLatestCanvasProject} onOpenVersions={openVersions} onKeepLocalCopy={duplicateCurrentProject} />}
                                 readOnly={readOnly}
                                 onDuplicateProject={duplicateCurrentProject}
                                 versionsOpen={versions.open}
@@ -2703,7 +2725,7 @@ function InfiniteCanvasPage() {
 
                                 {focusMode ? (
                                     <CanvasFocusModeBar
-                                        syncStatus={<CanvasSyncStatus projectId={projectId} onLoadLatest={reloadLatestCanvasProject} onOpenVersions={openVersions} />}
+                                        syncStatus={<CanvasSyncStatus projectId={projectId} onLoadLatest={reloadLatestCanvasProject} onOpenVersions={openVersions} onKeepLocalCopy={duplicateCurrentProject} />}
                                         versionsOpen={versions.open}
                                         onToggleVersions={toggleVersions}
                                         dockRevealed={focusDockRevealed}
@@ -3060,6 +3082,7 @@ function InfiniteCanvasPage() {
                             onToggleFrame={(node) => handleFrameToggle(node.id)}
                             onSpreadSelection={spreadSelectedNodes}
                             onCopySelection={copySelectedNodes}
+                            onCopySelectedMedia={() => { void copySelectedMediaFiles(); }}
                             onDeleteSelection={() => deleteNodes(selectedNodeIds)}
                         />
 

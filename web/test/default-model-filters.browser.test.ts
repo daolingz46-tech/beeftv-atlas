@@ -65,6 +65,27 @@ async function saved(page: Page) {
     return JSON.parse(await page.getByLabel("saved changes").innerText());
 }
 
+test("channel and family survive navigation and reload; selected defaults survive page remount", async () => {
+    const page = await browser.newPage();
+    try {
+        await page.goto(server.url.toString());
+        await choose(page, "默认生图模型渠道", "Alternate Fixture");
+        await choose(page, "默认生图模型系列", "Seedream · 即梦图片");
+        await page.getByRole("button", { name: "切换项目页面" }).click();
+        await page.getByRole("button", { name: "切换项目页面" }).click();
+        expect(await modelLabels(page, "默认生图模型")).toEqual(["Seedream 5.0"]);
+        expect(await page.locator('[aria-labelledby="default-image-title"] .model-default-filters').innerText()).toContain("Alternate Fixture");
+        await page.reload();
+        expect(await modelLabels(page, "默认生图模型")).toEqual(["Seedream 5.0"]);
+        expect(await page.locator('[aria-labelledby="default-image-title"] .model-default-filters').innerText()).toContain("Alternate Fixture");
+        await choose(page, "默认生图模型", "Seedream 5.0");
+        await page.getByRole("button", { name: "切换项目页面" }).click();
+        await page.getByRole("button", { name: "切换项目页面" }).click();
+        expect(await page.locator('[aria-labelledby="default-image-title"] .model-default-select').innerText()).toBe("Seedream 5.0");
+        expect((await saved(page)).at(-1)).toEqual({ key: "imageModel", value: "b::seedream-5.0" });
+    } finally { await page.close(); }
+}, 30_000);
+
 test("channel and family narrow large catalogs without saving until a concrete model is chosen", async () => {
     const page = await browser.newPage();
     try {
@@ -72,6 +93,7 @@ test("channel and family narrow large catalogs without saving until a concrete m
         expect(await modelLabels(page, "默认生图模型")).toEqual(["GPT Image 2.5"]);
         await choose(page, "默认生图模型渠道", "Alternate Fixture");
         expect(await saved(page)).toEqual([]);
+        expect(await page.locator('[aria-labelledby="default-image-title"] [role="status"]').innerText()).toContain("当前默认仍为 Atlas Fixture");
         expect(await page.locator('[aria-labelledby="default-image-title"] .model-default-select').innerText()).toBe("GPT Image 2.5");
         await choose(page, "默认生图模型系列", "Seedream · 即梦图片");
         expect(await modelLabels(page, "默认生图模型")).toEqual(["Seedream 5.0"]);

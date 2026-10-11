@@ -80,6 +80,7 @@ type CanvasNodeContextMenuProps = {
     onToggleFrame: () => void;
     onSpreadSelection?: () => void;
     onCopySelection?: () => void;
+    onCopySelectedMedia?: () => void;
     onDeleteSelection?: () => void;
 };
 
@@ -120,6 +121,7 @@ export function CanvasNodeContextMenu({
     onToggleFrame,
     onSpreadSelection,
     onCopySelection,
+    onCopySelectedMedia,
     onDeleteSelection,
 }: CanvasNodeContextMenuProps) {
     const theme = canvasThemes[useActiveTheme()];
@@ -202,6 +204,7 @@ export function CanvasNodeContextMenu({
                     ) : menu.type === "canvas" ? (
                         <>
                             <MenuHeader title="画布命令" />
+                            {selectedCount > 0 && onCopySelectedMedia ? <MenuButton icon={<Clipboard />} label="复制所选图片/视频文件" detail="可粘贴到微信等软件" onClick={() => runAction(onCopySelectedMedia)} /> : null}
                             {hasMultiSelection ? (
                                 <>
                                     <MenuButton icon={<LayoutTemplate className="size-4" />} label="自适应整理画布" detail="保持相对布局并加大边距" disabled={!onSpreadSelection} onClick={() => onSpreadSelection && runAction(onSpreadSelection)} />
@@ -221,6 +224,7 @@ export function CanvasNodeContextMenu({
                         <>
                             <MenuHeader title={`已选 ${selectedCount} 个节点`} />
                             <MenuSection label="选区" />
+                            {onCopySelectedMedia ? <MenuButton icon={<Clipboard />} label="复制所选图片/视频文件" detail="可粘贴到微信等软件" onClick={() => runAction(onCopySelectedMedia)} /> : null}
                             <MenuButton icon={<LayoutTemplate />} label="自适应整理画布" detail="保持相对布局并加大边距" disabled={!onSpreadSelection} onClick={() => onSpreadSelection && runAction(onSpreadSelection)} />
                             <MenuDivider />
                             <MenuButton icon={<Copy />} label={`复制 ${selectedCount} 个节点`} shortcut="⌘C" disabled={!onCopySelection} onClick={() => onCopySelection && runAction(onCopySelection)} />

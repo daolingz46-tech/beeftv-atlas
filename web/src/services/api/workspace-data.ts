@@ -142,12 +142,12 @@ export type CanvasHistoryEntry = {
     contentUpdatedAt: string;
 };
 
-export function listCanvasHistory(id: string, signal?: AbortSignal) {
-    return http.get<{ snapshots: CanvasHistoryEntry[]; currentRevision: number }>(`/canvas-projects/${encodeURIComponent(id)}/history`, { signal });
+export function listCanvasHistory(id: string, signal?: AbortSignal, config?: HttpRequestConfig) {
+    return http.get<{ snapshots: CanvasHistoryEntry[]; currentRevision: number }>(`/canvas-projects/${encodeURIComponent(id)}/history`, { ...config, signal });
 }
 
-export function getCanvasHistoryEntry(id: string, snapshotId: string, signal?: AbortSignal) {
-    return http.get<{ snapshot: CanvasHistoryEntry; project: CanvasProject }>(`/canvas-projects/${encodeURIComponent(id)}/history/${encodeURIComponent(snapshotId)}`, { signal });
+export function getCanvasHistoryEntry(id: string, snapshotId: string, signal?: AbortSignal, config?: HttpRequestConfig) {
+    return http.get<{ snapshot: CanvasHistoryEntry; project: CanvasProject }>(`/canvas-projects/${encodeURIComponent(id)}/history/${encodeURIComponent(snapshotId)}`, { ...config, signal });
 }
 
 export type CanvasHistoryRestoreSummary = Pick<CanvasProject, "id" | "title" | "createdAt" | "updatedAt"> & {

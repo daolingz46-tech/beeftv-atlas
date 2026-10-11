@@ -266,6 +266,14 @@ func atlasQuoteWithRetry(ctx context.Context, request func() ([]byte, error)) ([
 	}
 	var public *AppError
 	var upstream providerHTTPError
+	if errors.As(err, &upstream) {
+		var response struct {
+			Message string `json:"msg"`
+		}
+		if json.Unmarshal([]byte(upstream.Body), &response) == nil && strings.EqualFold(strings.TrimSpace(response.Message), "not found") {
+			return nil, WrapAppError(http.StatusBadGateway, "Atlas 暂未提供该模型的报价（上游返回 not found）；这不代表生成一定不可用，请更换模型估价或稍后重试", err)
+		}
+	}
 	if errors.As(err, &upstream) && upstream.StatusCode == http.StatusTooManyRequests {
 		minutes := int(math.Ceil(upstream.RetryAfter.Minutes()))
 		if minutes < 1 {

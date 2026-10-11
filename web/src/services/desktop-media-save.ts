@@ -15,6 +15,13 @@ export async function copyOwnedMediaToClipboard(fileName: string, resourceId?: s
     await copy(sanitizeDownloadFileName(fileName), resourceId.trim());
 }
 
+export async function copyOwnedMediaFilesToClipboard(files: Array<{ fileName: string; resourceId?: string }>): Promise<void> {
+    const copy = typeof window !== "undefined" ? window.go?.main?.DesktopApp?.CopyOwnedMediaFiles : undefined;
+    if (!copy) throw new Error("批量复制媒体文件需要新版 Windows 桌面客户端");
+    if (!files.length || files.some(file => !file.resourceId?.trim())) throw new Error("部分媒体尚未保存为本机文件，请等待导入或生成完成后重试");
+    await copy(files.map(file => sanitizeDownloadFileName(file.fileName)), files.map(file => file.resourceId!.trim()));
+}
+
 export function isWailsNativeShell() {
     if (typeof window === "undefined") return false;
     return window.location?.protocol === "wails:" || typeof window.go?.main?.DesktopApp?.SaveOwnedMedia === "function" || typeof window.go?.main?.DesktopApp?.SaveOwnedArtifact === "function";

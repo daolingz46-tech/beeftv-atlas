@@ -2,7 +2,7 @@ import { acceptCanvasExternalRevisionCandidate, applyExternalCanvasRevision, can
 import { useCanvasHistoryStore } from "@/stores/canvas/use-canvas-history-store";
 import { ApiError, http } from "@/services/api/request";
 import { commitCanvasDocument } from "@/services/api/operations";
-import { restoreCanvasHistory } from "@/services/api/workspace-data";
+import { restoreCanvasHistory, listCanvasHistory, getCanvasHistoryEntry } from "@/services/api/workspace-data";
 import { resourceIdFromStorageKey } from "@/services/api/resources";
 import { notifyCanvasRefresh } from "@/services/local-workspace-sync";
 import { canvasBackendSubmitPaused, CanvasBackendSubmitPausedError, CanvasStaleScopeError, handleRejectedCanvasBackendSave, isCanvasRevisionConflict, isCanvasSubmitControlError, pauseCanvasBackendSubmit, resumeCanvasBackendSubmit } from "@/services/canvas-revision-conflict";
@@ -281,6 +281,10 @@ async function persistProjectedCanvas(id: string, scope: string, identity: strin
     try {
         await projectionStoreFlush();
         if (!matchesDispatchGuard(expected)) throw new CanvasStaleScopeError();
+        // A conflict must survive a restart. Keep its base/remote projection in
+        // the durable journal until the user resolves it rather than blessing
+        // the conflicting draft as an ordinary edit against a new baseline.
+        if (canvasSubmitBlocked(id, scope)) return;
         await clearCanvasPendingProjection(id, scope, identity);
     } catch (error) {
         if (error instanceof CanvasProjectionError || error instanceof CanvasStaleScopeError) throw error;
@@ -352,6 +356,13 @@ async function applyBackendCanvasRead(
         const currentLocal = liveNow ?? local;
         const hadLive = Boolean(liveNow) || hadLiveAtStart;
         if (!matchesDispatchGuard(expected)) return currentLocal ?? local ?? backend;
+        // Older desktop caches may predate the durable commit journal. Recover
+        // an ancestor from this owner's server history, never from another scope
+        // or by pretending the current draft was already confirmed.
+        if (currentLocal && !canvasDocumentBase(backend.id, scope) && !sameCanvasDocument(currentLocal, backend)) {
+            await recoverHistoricalCanvasBase(currentLocal, backend, expected);
+            if (!matchesDispatchGuard(expected)) return currentLocal;
+        }
         const chosen = selectPreferredCanvasProject(currentLocal, backend, scope);
         traceCanvasGraph("repository.read.select", { local: currentLocal, backend, base: canvasDocumentBase(backend.id, scope)?.snapshot, chosen });
         if (!currentLocal || chosen === backend || sameCanvasDocument(chosen, backend)) {
@@ -388,6 +399,19 @@ async function applyBackendCanvasRead(
         const serverMoved = !recorded
             || (backend.revision ?? 0) !== recorded.revision
             || !sameCanvasDocument(backend, recorded.snapshot);
+        if (serverMoved && recorded) {
+            const settled = settleInFlightGenerationOverlay({ base: recorded.snapshot, local: currentLocal, remote: backend });
+            if (rebaseCanvasDocumentThreeWay({ base: recorded.snapshot, local: settled, remote: backend }).conflict) {
+                pauseForExternalCandidate(currentLocal.id, backend, scope);
+                if (settled !== currentLocal) applyLiveCanvasProject(backend.id, settled, false);
+                return settled;
+            }
+            const confirmed = await confirmRemoteDocument(backend, scope);
+            if (!matchesDispatchGuard(expected)) return currentLocal;
+            const aligned = alignLiveAfterConfirmedRemote({ id: backend.id, scope, remote: backend, base: recorded.snapshot, hadLive, expected });
+            await persistProjectedCanvas(backend.id, scope, confirmed.pendingProjection?.identity, { throwOnFailure: false }, expected);
+            return aligned ?? currentLocal;
+        }
         if (serverMoved) pauseForExternalCandidate(currentLocal.id, backend, scope);
         const settled = settleInFlightGenerationOverlay({
             base: recorded?.snapshot ?? backend,
@@ -397,6 +421,27 @@ async function applyBackendCanvasRead(
         if (settled !== currentLocal) applyLiveCanvasProject(backend.id, settled, false);
         return settled;
     });
+}
+
+async function recoverHistoricalCanvasBase(local: CanvasProject, remote: CanvasProject, expected: CapturedUserScope) {
+    const revision = local.revision ?? 0;
+    const journal = peekCanvasOperationJournal(local.id, expected.userScope);
+    if (!isLocalWorkspaceMode() || revision <= 0 || revision > (remote.revision ?? 0) || journal?.inFlight || journal?.confirmedSnapshot) return;
+    try {
+        const history = await listCanvasHistory(local.id, undefined, { expectedScope: expected });
+        assertDispatchGuard(expected);
+        const entry = history.snapshots?.filter((item) => item.canvasId === local.id && item.revision > 0 && item.revision <= revision)
+            .sort((a, b) => b.revision - a.revision)[0];
+        if (!entry) return;
+        const snapshot = await getCanvasHistoryEntry(local.id, entry.id, undefined, { expectedScope: expected });
+        assertDispatchGuard(expected);
+        if (snapshot.snapshot?.id !== entry.id || snapshot.snapshot.canvasId !== local.id || snapshot.snapshot.revision !== entry.revision || snapshot.project?.id !== local.id || snapshot.project.revision !== entry.revision) return;
+        const confirmed = await recordConfirmedCanvasCommit(snapshot.project, expected.userScope);
+        if (matchesDispatchGuard(expected)) recordServerConfirmedCanvas(confirmed.confirmedSnapshot ?? snapshot.project, expected.userScope);
+    } catch (error) {
+        rethrowIfAbandoned(error);
+        // Missing/expired history leaves the draft protected by the conflict UI.
+    }
 }
 
 /**
