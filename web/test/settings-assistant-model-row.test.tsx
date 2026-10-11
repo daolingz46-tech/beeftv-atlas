@@ -25,7 +25,8 @@ function assistantSelection(config: AiConfig) {
     const end = markup.indexOf('id="default-audio-title"');
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
-    return markup.slice(start, end).match(/class="ant-select-content[^"]*" title="([^"]*)"/)?.[1];
+    const modelStart = markup.indexOf("model-default-select ", start);
+    return markup.slice(modelStart, end).match(/class="ant-select-content[^"]*" title="([^"]*)"/)?.[1];
 }
 
 describe("模型配置页的助手模型一行", () => {
