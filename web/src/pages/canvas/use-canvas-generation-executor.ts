@@ -4,13 +4,15 @@ import { App } from "antd";
 
 import { buildNodeGenerationContext, hydrateNodeGenerationContext } from "@/components/canvas/canvas-node-generation";
 import type { CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-prompt-panel";
-import { buildGenerationConfig, isGenerationCanceled } from "@/lib/canvas/canvas-project-generation";
+import { isGenerationCanceled } from "@/lib/canvas/canvas-project-generation";
+import { buildConfirmedGenerationConfig } from "./canvas-assistant-proposal-execution";
+import type { ConfirmedGenerationInputs } from "./canvas-assistant-proposal-snapshot";
 import { canvasGenerationPromptMetadata, canvasGenerationRequestFingerprint, runCanvasGenerationSubmissionOnce } from "@/lib/canvas/canvas-generation-submission";
 import { isGenerationTaskCapacityError } from "@/lib/canvas/canvas-generation-batch";
 import { buildCanvasGenerationPrompt, prepareCanvasGenerationContent } from "@/services/canvas-generation-preparation";
 import { generationErrorMessage } from "@/lib/generation-error";
-import { modelCompatibilityError, modelGroupReferenceLimits, modelRequestOptions, type ModelRequirements } from "@/lib/model-selection";
 import { navigateToSettings } from "@/lib/settings-navigation";
+import { modelCompatibilityError, modelGroupReferenceLimits, modelPromptLengthError, modelRequestOptions, type ModelRequirements } from "@/lib/model-selection";
 import type { Skill } from "@/services/api/skills";
 import type { GenerationTask } from "@/services/api/task-center";
 import { useConfigStore, useEffectiveConfig, resolveModelRequestConfig } from "@/stores/use-config-store";
@@ -21,7 +23,8 @@ import { CanvasNodeType, type CanvasConnection, type CanvasNodeData } from "@/ty
 import { executeImageGeneration } from "./canvas-image-generation-executor";
 import { executeAudioGeneration, executeVideoGeneration } from "./canvas-media-generation-executors";
 import { executeTextGeneration } from "./canvas-text-generation-executor";
-import { canvasGenerationFailureMetadata, canvasGenerationRetryBlocked } from "./canvas-generation-failure";
+import { canvasGenerationFailureMetadata, canvasGenerationRetryBlocked, canvasImageGenerationHasPendingResult } from "./canvas-generation-failure";
+import { createReferenceLinkResolver } from "./canvas-reference-links";
 
 type UseCanvasGenerationExecutorOptions = {
     projectId: string;
@@ -48,6 +51,10 @@ const NODE_STATUS_SUCCESS = "success" as const;
 const NODE_STATUS_ERROR = "error" as const;
 
 export type CanvasNodeGenerationOptions = {
+    confirmedModelKey?: string;
+    confirmedInputs?: ConfirmedGenerationInputs;
+    /** 一次确认的稳定身份。重复提交必须复用，服务端据此回读原任务。 */
+    clientOperationId?: string;
     controller?: AbortController;
     waitForTaskCapacity?: boolean;
     context?: { conversationId?: string; messageId?: string };
@@ -100,8 +107,17 @@ export function useCanvasGenerationExecutor({
                 submissionLocksRef.current,
                 nodeId,
                 async () => {
-                    const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
-                    if (isCanvasNodeGenerating(sourceNode)) {
+                    const inputNodes = options?.confirmedInputs?.nodes ?? nodesRef.current;
+                    const inputConnections = options?.confirmedInputs?.connections ?? connectionsRef.current;
+                    const inputConfig = options?.confirmedInputs?.config ?? effectiveConfig;
+                    const inputAssets = options?.confirmedInputs?.assets ?? assets;
+                    const inputSkills = options?.confirmedInputs?.skills ?? addedSkills;
+                    const sourceNode = inputNodes.find((node) => node.id === nodeId);
+                    if (mode === "image" && canvasImageGenerationHasPendingResult(sourceNode, inputNodes)) {
+                        message.warning("生成结果已保留，请重新加载资源");
+                        return;
+                    }
+                    if (isCanvasNodeGenerating(nodesRef.current.find((node) => node.id === nodeId))) {
                         message.info("该节点的生成任务仍在进行中，请等待完成后再生成");
                         return;
                     }
@@ -109,9 +125,15 @@ export function useCanvasGenerationExecutor({
                         message.info("合并成片节点不直接重新生成，请重新选择源视频合并");
                         return;
                     }
-                    let generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode);
+                    let generationConfig: ReturnType<typeof buildConfirmedGenerationConfig>;
+                    try {
+                        generationConfig = buildConfirmedGenerationConfig(inputConfig, sourceNode, mode, undefined, options?.confirmedModelKey);
+                    } catch (error) {
+                        message.error(generationErrorMessage(error));
+                        return;
+                    }
                     const hasLiveBatchChildren =
-                        sourceNode?.type === CanvasNodeType.Image && (sourceNode.metadata?.batchChildIds || []).some((childId) => nodesRef.current.some((node) => node.id === childId && node.metadata?.batchRootId === sourceNode.id));
+                        sourceNode?.type === CanvasNodeType.Image && (sourceNode.metadata?.batchChildIds || []).some((childId) => inputNodes.some((node) => node.id === childId && node.metadata?.batchRootId === sourceNode.id));
                     const hasStaleImageBatchState =
                         mode === "image" && sourceNode?.type === CanvasNodeType.Image && !sourceNode.metadata?.content && Boolean(sourceNode.metadata?.isBatchRoot || sourceNode.metadata?.batchChildIds?.length) && !hasLiveBatchChildren;
                     if (hasStaleImageBatchState) {
@@ -147,20 +169,20 @@ export function useCanvasGenerationExecutor({
                     try {
                         const baseContext = buildNodeGenerationContext(
                             nodeId,
-                            nodesRef.current,
-                            connectionsRef.current,
+                            inputNodes,
+                            inputConnections,
                             generationPrompt,
-                            assets,
+                            inputAssets,
                             promptOnly,
                         );
                         const requirements = generationModelRequirements(mode, baseContext, sourceNode, generationConfig, true);
-                        generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode, requirements);
+                        generationConfig = buildConfirmedGenerationConfig(inputConfig, sourceNode, mode, requirements, options?.confirmedModelKey);
                         const compatibilityError = usesWorkflowProvider ? "" : modelCompatibilityError(generationConfig, generationConfig.model, requirements);
                         if (compatibilityError) throw new Error(`当前模型无法支持这组输入和参数：${compatibilityError}`);
-                        const referenceLimits = usesWorkflowProvider ? undefined : modelGroupReferenceLimits(effectiveConfig, generationConfig.model, mode, requirements);
+                        const referenceLimits = usesWorkflowProvider ? undefined : modelGroupReferenceLimits(inputConfig, generationConfig.model, mode, requirements);
                         rawGenerationContext = await hydrateNodeGenerationContext(baseContext, projectId, domainProjectId, mode, mode === "video" && Boolean(referenceLimits?.maxAudios), !promptOnly, referenceLimits);
                         const hydratedRequirements = generationModelRequirements(mode, rawGenerationContext, sourceNode, generationConfig);
-                        generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode, hydratedRequirements);
+                        generationConfig = buildConfirmedGenerationConfig(inputConfig, sourceNode, mode, hydratedRequirements, options?.confirmedModelKey);
                         const hydratedCompatibilityError = usesWorkflowProvider ? "" : modelCompatibilityError(generationConfig, generationConfig.model, hydratedRequirements);
                         if (hydratedCompatibilityError) throw new Error(`当前模型无法支持这组输入和参数：${hydratedCompatibilityError}`);
                     } catch (error) {
@@ -171,7 +193,7 @@ export function useCanvasGenerationExecutor({
 
                     let preparedContent: Awaited<ReturnType<typeof prepareCanvasGenerationContent>>;
                     try {
-                        preparedContent = await prepareCanvasGenerationContent({ context: rawGenerationContext, config: generationConfig, nodes: nodesRef.current, sourceNode, mode, skills: addedSkills });
+                        preparedContent = await prepareCanvasGenerationContent({ context: rawGenerationContext, config: generationConfig, nodes: inputNodes, sourceNode, mode, skills: inputSkills });
                     } catch (error) {
                         message.error(generationErrorMessage(error));
                         return;
@@ -275,8 +297,11 @@ export function useCanvasGenerationExecutor({
                     let pendingNodeIds: string[] = [];
                     const execution = {
                         projectId,
+                        nodesRef,
                         nodeId,
                         sourceNode,
+                        // 收费输入保持确认时的快照；目标节点写回必须使用当前画布。
+                        // 另一目标可能已在重复生成确认等待期间完成，不能把整图回滚到旧结果。
                         canvasNodes: nodesRef.current,
                         canvasConnections: connectionsRef.current,
                         prompt,
@@ -289,6 +314,7 @@ export function useCanvasGenerationExecutor({
                         skillMetadata,
                         taskContext: options?.context,
                         retryContext: options?.retryContext,
+                        clientOperationId: options?.clientOperationId,
                         setNodes,
                         setConnections,
                         setSelectedNodeIds,
@@ -307,6 +333,7 @@ export function useCanvasGenerationExecutor({
                         },
                         applyGenerationTaskResult,
                         showError: (content: string) => message.error(content),
+                        resolveReferenceLinks: createReferenceLinkResolver(modal),
                         registerPendingNodeIds: (nodeIds: string[]) => {
                             pendingNodeIds = nodeIds;
                         },

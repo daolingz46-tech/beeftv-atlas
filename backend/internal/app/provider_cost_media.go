@@ -22,7 +22,7 @@ import (
 )
 
 func (s *Service) estimateAtlasNativeImageCost(ctx context.Context, userID string, input canvasGenerationInput) (*generation.CostEstimate, error) {
-	if err := s.hydrateVideoReferenceMetadata(userID, &input); err != nil {
+	if err := s.hydrateVideoReferenceMetadata(ctx, userID, &input); err != nil {
 		return nil, err
 	}
 	// Atlas's native image interfaces have token rates but no calculate expression.
@@ -175,7 +175,7 @@ func (s *Service) prepareAtlasBillingMedia(ctx context.Context, userID string, o
 	if original.Mask != nil {
 		mask := *original.Mask
 		metadata := canvasGenerationInput{Config: original.Config, ReferenceImages: []providerMedia{mask}}
-		if err := s.hydrateVideoReferenceMetadata(userID, &metadata); err != nil {
+		if err := s.hydrateVideoReferenceMetadata(ctx, userID, &metadata); err != nil {
 			return input, err
 		}
 		mask = metadata.ReferenceImages[0]

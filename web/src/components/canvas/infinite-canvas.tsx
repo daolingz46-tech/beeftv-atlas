@@ -7,6 +7,7 @@ import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { applyCanvasLiveViewport, subscribeCanvasViewportPreview } from "@/lib/canvas/canvas-live-viewport";
 import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
 import type { ViewportTransform } from "@/types/canvas";
+import { canvasWheelIntent } from "@/lib/canvas/canvas-wheel";
 
 type InfiniteCanvasProps = {
     interactive?: boolean;
@@ -70,6 +71,7 @@ export function InfiniteCanvas({ interactive = true, containerRef, viewport, app
     const touchPointsRef = useRef(new Map<number, TouchPoint>());
     const pinchStateRef = useRef<PinchState>({ active: false, pointerIds: [-1, -1], initialDistance: 1, worldX: 0, worldY: 0, initialScale: viewport.k });
     const spacePressedRef = useRef(false);
+    const wheelGestureRef = useRef<{ intent: "pan" | "zoom"; at: number; modifiers: number } | null>(null);
     const [isSpacePressed, setIsSpacePressed] = useState(false);
     const [isPanning, setIsPanning] = useState(false);
 
@@ -226,9 +228,12 @@ export function InfiniteCanvas({ interactive = true, containerRef, viewport, app
             event.preventDefault();
             interactingRef.current = true;
             const current = viewportRef.current;
-            const rawAbsY = Math.abs(event.deltaY);
-            const looksLikeMouseWheel = event.deltaMode !== 0 || (rawAbsY >= 80 && Math.abs(rawAbsY - Math.round(rawAbsY / 100) * 100) < 1);
-            const looksLikeTrackpadPan = !isPinchZoom && (event.shiftKey || absX > 0 || (!looksLikeMouseWheel && absY > 0));
+            const now = performance.now();
+            const modifiers = Number(isPinchZoom) * 2 + Number(event.shiftKey);
+            const previous = wheelGestureRef.current?.modifiers === modifiers ? wheelGestureRef.current : null;
+            const intent = canvasWheelIntent(event, previous, now);
+            wheelGestureRef.current = { intent, at: now, modifiers };
+            const looksLikeTrackpadPan = intent === "pan";
 
             if (looksLikeTrackpadPan) {
                 const panX = event.shiftKey && absX < 1 ? deltaY : deltaX;
@@ -244,7 +249,7 @@ export function InfiniteCanvas({ interactive = true, containerRef, viewport, app
             if (!rect) return;
             const mouseX = event.clientX - rect.left;
             const mouseY = event.clientY - rect.top;
-            const zoomDelta = isPinchZoom && !looksLikeMouseWheel ? TRACKPAD_PINCH_ZOOM_DELTA : WHEEL_ZOOM_DELTA;
+            const zoomDelta = isPinchZoom && event.deltaMode === 0 && absY < 40 ? TRACKPAD_PINCH_ZOOM_DELTA : WHEEL_ZOOM_DELTA;
             const factor = Math.pow(1.1, -deltaY / zoomDelta);
             const newScale = clampScale(current.k * factor);
             const worldX = (mouseX - current.x) / current.k;
@@ -254,7 +259,7 @@ export function InfiniteCanvas({ interactive = true, containerRef, viewport, app
                 x: mouseX - worldX * newScale,
                 y: mouseY - worldY * newScale,
                 k: newScale,
-            }, true, looksLikeMouseWheel);
+            }, true, !isPinchZoom && event.deltaMode !== 0 || !isPinchZoom && absY >= 40);
         },
         [containerRef, scheduleViewportChange],
     );

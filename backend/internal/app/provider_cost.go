@@ -72,7 +72,7 @@ func (s *Service) EstimateGenerationCost(ctx context.Context, userID string, raw
 	if !exists {
 		return nil, BadAuthRequest("该模型的费用预估适配器未安装")
 	}
-	if err := s.hydrateVideoReferenceMetadata(userID, &input); err != nil {
+	if err := s.hydrateVideoReferenceMetadata(ctx, userID, &input); err != nil {
 		return nil, err
 	}
 	if input.Mode == "video" {

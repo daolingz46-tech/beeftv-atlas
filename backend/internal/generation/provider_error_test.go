@@ -13,12 +13,70 @@ import (
 	"infinite-canvas/backend/internal/generation"
 )
 
-func TestWindowsSocketFailureIsActionable(t *testing.T) {
-	for _, message := range []string{"An existing connection was forcibly closed by the remote host.", "An established connection was aborted by the software in your host machine."} {
-		failure := generation.ClassifyError(errors.New(`Get "https://private.example/task?token=secret": read tcp: wsarecv: ` + message))
-		if failure.Category != generation.CategoryNetwork || strings.Contains(failure.UserMessage(), "wsarecv") || strings.Contains(failure.UserMessage(), "secret") {
-			t.Fatalf("failure=%+v message=%s", failure, failure.UserMessage())
+func TestOutboundPolicyErrorsHaveActionableCopyAndDiagnostics(t *testing.T) {
+	for _, message := range []string{
+		"不允许访问本机或内网地址", "不允许访问本机、内网或链路本地地址",
+		"不允许访问保留地址或特殊用途地址", "外部服务域名解析失败",
+	} {
+		raw := message + "。HTTP 400。排查编号：任务 job-outbound · 请求 req-outbound。"
+		for _, failure := range []generation.Failure{
+			generation.ClassifyText(raw), generation.ClassifyAppError(400, 400, "invalid_argument", raw),
+		} {
+			if failure.Category != generation.CategoryNetwork || failure.HTTPStatus != 400 || failure.RequestID != "req-outbound" || failure.TaskID != "job-outbound" {
+				t.Fatalf("lost classification or diagnostics for %q: %+v", message, failure)
+			}
+			if strings.Contains(failure.Action, "CANVAS_ALLOW_PRIVATE_UPSTREAMS") {
+				t.Fatalf("unsafe global bypass advice: %+v", failure)
+			}
+			if strings.Contains(message, "不允许") && (!strings.Contains(failure.Action, "管理员") || !strings.Contains(failure.Action, "仅将该主机")) {
+				t.Fatalf("missing bounded administrator guidance: %+v", failure)
+			}
+			if strings.Contains(message, "解析失败") && !strings.Contains(failure.Action, "域名是否正确") {
+				t.Fatalf("missing DNS guidance: %+v", failure)
+			}
 		}
+	}
+}
+
+func TestOutboundPolicyCopyDoesNotOverrideStructuredProviderErrors(t *testing.T) {
+	for _, raw := range []string{
+		`{"error":{"code":"invalid_api_key","message":"不允许访问本机或内网地址"},"request_id":"req-auth","task_id":"job-auth"}`,
+		`{"error":{"code":"invalid_api_key","message":"invalid key"},"prompt":"外部服务域名解析失败","request_id":"req-auth","task_id":"job-auth"}`,
+	} {
+		failure := generation.ClassifyAppError(401, 401, "invalid_api_key", raw)
+		if failure.Category != generation.CategoryAuth || failure.HTTPStatus != 401 || failure.RequestID != "req-auth" || failure.TaskID != "job-auth" {
+			t.Fatalf("structured provider error overwritten: %+v", failure)
+		}
+	}
+	if failure := generation.ClassifyText(`{"prompt":"不允许访问本机或内网地址"}`); failure.Category != generation.CategoryUnknown {
+		t.Fatalf("request echo classified as local policy failure: %+v", failure)
+	}
+}
+
+func TestLocalDatabaseFailuresNeverBlameModelParameters(t *testing.T) {
+	for _, message := range []string{"table tasks has no column named failure_diagnostics", "no such column: failure_diagnostics", "no such table: tasks", "database is locked", "attempt to write a readonly database", "disk I/O error", "UNIQUE constraint failed: tasks.id", "NOT NULL constraint failed: tasks.type", "CHECK constraint failed: task_status", "FOREIGN KEY constraint failed"} {
+		for _, failure := range []generation.Failure{generation.ClassifyText(message), generation.ClassifyAppError(400, 400, "invalid_argument", message), generation.ClassifyHTTP(500, "", message), generation.ClassifyText(fmt.Sprintf(`{"error":{"code":"invalid_argument","message":%q}}`, message))} {
+			if string(failure.Category) != "local_storage" || failure.Retryable || !failure.BlocksAutomaticRetry() || !strings.Contains(failure.UserMessage(), "数据库") || strings.Contains(failure.UserMessage(), "failure_diagnostics") {
+				t.Errorf("%q: %+v; display=%s", message, failure, failure.UserMessage())
+			}
+		}
+	}
+}
+
+func TestLocalDatabaseClassificationPreservesProviderParameters(t *testing.T) {
+	for _, echo := range []string{"UNIQUE constraint failed: tasks.id", "NOT NULL constraint failed: tasks.type", "CHECK constraint failed: task_status", "FOREIGN KEY constraint failed"} {
+		if got := generation.ClassifyText(fmt.Sprintf(`{"error":{"code":"invalid_parameter","message":"invalid size"},"prompt":%q}`, echo)); got.Category != generation.CategoryInvalidParams {
+			t.Errorf("request echo changed classification: %+v", got)
+		}
+	}
+	for _, raw := range []string{`{"error":{"code":"invalid_parameter","message":"invalid size"},"prompt":"table tasks has no column named failure_diagnostics"}`, `{"error":{"code":"invalid_parameter","message":"invalid size"}}`} {
+		if got := generation.ClassifyText(raw); got.Category != generation.CategoryInvalidParams {
+			t.Errorf("provider parameter failure changed: %+v", got)
+		}
+	}
+	failure := generation.ClassifyAppError(500, 500, "local_storage", "")
+	if failure.Category != generation.CategoryLocalStorage || generation.ClassifyText(failure.UserMessage()).Category != generation.CategoryLocalStorage {
+		t.Errorf("stable reason or persisted copy lost: %+v", failure)
 	}
 }
 
@@ -481,5 +539,14 @@ func TestMediaCopyPreservesAuthenticationAndIgnoresRequestEcho(t *testing.T) {
 	failure := generation.ClassifyText(`{"error":{"code":"unknown","message":"Failure"},"prompt":"unsupported video codec"}`)
 	if failure.Category != generation.CategoryUnknown {
 		t.Fatalf("request echo classified: %+v", failure)
+	}
+}
+
+func TestWindowsSocketFailureIsActionable(t *testing.T) {
+	for _, message := range []string{"An existing connection was forcibly closed by the remote host.", "An established connection was aborted by the software in your host machine."} {
+		failure := generation.ClassifyError(errors.New(`Get "https://private.example/task?token=secret": read tcp: wsarecv: ` + message))
+		if failure.Category != generation.CategoryNetwork || strings.Contains(failure.UserMessage(), "wsarecv") || strings.Contains(failure.UserMessage(), "secret") {
+			t.Fatalf("failure=%+v message=%s", failure, failure.UserMessage())
+		}
 	}
 }

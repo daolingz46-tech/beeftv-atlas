@@ -2,11 +2,39 @@
     display: flex;
     min-width: 0;
     align-items: center;
+    gap: 8px;
+}
+
+.app-workspace-sidebar-contact-row {
+    display: flex;
+    min-height: 36px;
+    align-items: center;
+    justify-content: flex-end;
     gap: 4px;
+    margin-bottom: 4px;
+}
+
+.app-workspace-sidebar-contact-row.is-collapsed {
+    justify-content: center;
 }
 
 .app-workspace-sidebar-utility-row.is-collapsed {
     flex-direction: column;
+}
+
+.app-workspace-social-links {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+}
+
+.app-workspace-sidebar-contact-row.is-collapsed .app-workspace-social-links {
+    flex-direction: column;
+}
+
+.app-workspace-sidebar-utility-row:not(.is-collapsed) > .app-workspace-theme-action {
+    margin-left: 0;
 }
 
 .app-workspace-update {
@@ -14,7 +42,7 @@
     min-width: 0;
     flex: 1;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
 }
 
 .app-workspace-update.is-collapsed {
@@ -45,6 +73,8 @@
 .app-workspace-update-version:focus-visible,
 .app-workspace-update-action:hover,
 .app-workspace-update-action:focus-visible,
+.app-workspace-social-action:hover,
+.app-workspace-social-action:focus-visible,
 .app-workspace-theme-action:hover,
 .app-workspace-theme-action:focus-visible {
     background: var(--user-surface-hover, color-mix(in srgb, var(--foreground) 8%, transparent));
@@ -59,10 +89,11 @@
 }
 
 .app-workspace-update-action,
+.app-workspace-social-action,
 .app-workspace-theme-action {
     display: inline-flex;
-    width: 36px;
-    height: 36px;
+    width: 32px;
+    height: 32px;
     flex: none;
     align-items: center;
     justify-content: center;
@@ -74,7 +105,81 @@
     cursor: pointer;
 }
 
-.app-workspace-update-action:not(.is-busy) {
+.app-workspace-social-action svg {
+    width: 16px;
+    height: 16px;
+}
+
+.app-workspace-github-tooltip .ant-tooltip-inner {
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: 7px 10px;
+    background: var(--popover);
+    box-shadow: var(--elevation-overlay);
+}
+
+.app-workspace-github-tooltip .ant-tooltip-arrow::before {
+    background: var(--popover);
+}
+
+.app-workspace-github-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--user-ink, var(--foreground));
+    font-size: var(--fs-caption);
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.app-workspace-github-hint svg {
+    width: 13px;
+    height: 13px;
+    flex: none;
+    fill: currentColor;
+}
+
+.app-workspace-wechat-popover .ant-popover-inner {
+    padding: 8px;
+    border-radius: 12px;
+    background: #fff;
+}
+
+.app-workspace-donation-popover .ant-popover-container {
+    padding: 12px;
+    border-radius: var(--r-lg);
+    background: var(--popover);
+    color: var(--foreground);
+}
+
+.app-workspace-wechat-popover .ant-popover-inner-content img {
+    display: block;
+    width: 180px;
+    height: 180px;
+}
+
+.app-workspace-donation-content {
+    width: 328px;
+    max-width: calc(100vw - 40px);
+    text-align: center;
+}
+
+.app-workspace-donation-content p {
+    margin: 4px 0 12px;
+    color: var(--foreground);
+    font-size: 14px;
+    line-height: 22px;
+}
+
+.app-workspace-donation-content img {
+    display: block;
+    width: 220px;
+    max-width: 100%;
+    height: auto;
+    margin: 0 auto;
+}
+
+.app-workspace-update-action.has-update:not(.is-busy) {
     color: var(--user-accent, var(--primary));
 }
 
@@ -84,6 +189,7 @@
 
 .app-workspace-update-version:focus-visible,
 .app-workspace-update-action:focus-visible,
+.app-workspace-social-action:focus-visible,
 .app-workspace-theme-action:focus-visible {
     outline: 2px solid var(--user-accent, var(--ring));
     outline-offset: 2px;
@@ -106,6 +212,96 @@
     border-radius: inherit;
     background: var(--user-accent, var(--primary));
     transition: width 160ms ease;
+}
+
+.app-workspace-update-progress-bar.is-paused > span {
+    background: var(--user-ink-soft, var(--muted-foreground));
+}
+
+.app-workspace-update-status {
+    position: relative;
+    display: flex;
+    min-width: 0;
+    min-height: 36px;
+    flex: 1;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1px;
+    padding: 4px 8px 7px;
+    color: var(--user-ink, var(--foreground));
+    cursor: default;
+}
+
+.app-workspace-update-status-title {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 5px;
+    font-size: var(--fs-caption);
+    line-height: 16px;
+}
+
+.app-workspace-update-status-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.app-workspace-update-status-percent {
+    margin-left: auto;
+    color: var(--user-ink-muted, var(--muted-foreground));
+    font-variant-numeric: tabular-nums;
+}
+
+.app-workspace-update-status-detail {
+    overflow: hidden;
+    color: var(--user-ink-muted, var(--muted-foreground));
+    font-size: var(--fs-label);
+    font-variant-numeric: tabular-nums;
+    line-height: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.app-workspace-update-status.is-action {
+    border: 0;
+    border-radius: var(--r-md);
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.app-workspace-update-status.is-action:hover,
+.app-workspace-update-status.is-action:focus-visible {
+    background: var(--user-surface-hover, color-mix(in srgb, var(--foreground) 8%, transparent));
+}
+
+.app-workspace-update-status.is-action:focus-visible {
+    outline: 2px solid var(--user-accent, var(--ring));
+    outline-offset: 2px;
+}
+
+.app-workspace-update-status-icon {
+    width: 13px;
+    height: 13px;
+    flex: none;
+    color: var(--user-accent, var(--primary));
+}
+
+.app-workspace-update-status.is-paused .app-workspace-update-status-detail {
+    display: -webkit-box;
+    white-space: normal;
+    text-wrap: balance;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+}
+
+.app-workspace-update-status .app-workspace-update-progress-bar {
+    right: 8px;
+    bottom: 2px;
+    left: 8px;
 }
 
 @media (prefers-reduced-motion: reduce) {

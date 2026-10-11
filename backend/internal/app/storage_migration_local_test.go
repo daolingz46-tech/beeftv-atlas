@@ -15,6 +15,7 @@ func TestLocalStorageMigrationCreatesBackupAndPreservesTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeTestDatabaseOnCleanup(t, db)
 	if err := database.MigrateLocalSchema(db); err != nil {
 		t.Fatal(err)
 	}
@@ -32,6 +33,7 @@ func TestLocalStorageMigrationCreatesBackupAndPreservesTask(t *testing.T) {
 	}
 
 	svc := NewLocal(repository.New(db), dataDir)
+	t.Cleanup(func() { svc.Close() })
 	summary, err := svc.MigrateLegacyStorage()
 	if err != nil {
 		t.Fatal(err)

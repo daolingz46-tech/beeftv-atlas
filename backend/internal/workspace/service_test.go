@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -23,7 +24,7 @@ func TestProviderConfigIsAtomicPrivateAndPreservesRedactedSecrets(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := info.Mode().Perm(); got != 0o600 {
+	if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0o600 {
 		t.Fatalf("provider config mode = %o, want 600", got)
 	}
 
@@ -32,7 +33,7 @@ func TestProviderConfigIsAtomicPrivateAndPreservesRedactedSecrets(t *testing.T) 
 		t.Fatal(err)
 	}
 	if bytes.Contains(redacted, []byte("secret-key")) || !bytes.Contains(redacted, []byte(RedactedSecret)) {
-		t.Fatalf("redacted config leaks or drops secret marker: %s", redacted)
+		t.Fatal("redacted config leaks or drops secret marker")
 	}
 	var view map[string]any
 	if err := json.Unmarshal(redacted, &view); err != nil {
@@ -48,7 +49,7 @@ func TestProviderConfigIsAtomicPrivateAndPreservesRedactedSecrets(t *testing.T) 
 		t.Fatal(err)
 	}
 	if !bytes.Contains(raw, []byte("secret-key")) || !bytes.Contains(raw, []byte("updated")) {
-		t.Fatalf("secret-preserving update failed: %s", raw)
+		t.Fatal("secret-preserving update failed")
 	}
 
 	if err := store.SaveLocalModelConfig([]byte(`{"channels":`)); err == nil {

@@ -60,6 +60,17 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['request_id'], 'test-request-001')
         self.assertNotIn('secret', json.dumps(result))
 
+    async def test_official_owner_boundary_does_not_expose_credentials(self):
+        owner = 'a' * 64
+        (self.root / 'agent_owner_token').write_text(owner, encoding='utf-8')
+        config = self.bridge.connection()
+        self.assertNotIn('X-Beeftv-Owner', self.bridge.local_headers(config, '/workspace/model-config'))
+        self.assertEqual(self.bridge.local_headers(config, '/tasks')['X-Beeftv-Owner'], owner)
+        self.assertEqual(self.bridge.local_headers(config, '/resources')['X-Beeftv-Owner'], owner)
+        self.assertEqual(self.bridge.redact({'ownerToken': owner, 'msg': owner}), {'msg': '[redacted]'})
+        (self.root / 'agent_owner_token').write_text('invalid', encoding='utf-8')
+        with self.assertRaises(RuntimeError): self.bridge.local_headers(config, '/tasks')
+
     async def test_duplicate_survives_restart_and_rejects_modified_request(self):
         await self.bridge.generate(self.request, 'test-request-002')
         restarted = Bridge(self.root, httpx.MockTransport(self.handle))

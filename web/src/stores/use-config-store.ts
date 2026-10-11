@@ -6,10 +6,11 @@ import { nanoid } from "nanoid";
 import { scopedLocalStorage } from "@/lib/user-scope";
 import { beefAPIVideoContract, isBeefAPIEndpoint } from "@/lib/beefapi-video-contracts";
 import { defaultProtocolForCapability, defaultProtocolForModel, modelProtocolCapability, normalizeModelProtocol, usesOpenAICompatibleProtocolDefault, type ModelProtocol } from "@/lib/model-protocols";
-import { normalizeVideoDuration, normalizeVideoResolution } from "@/lib/video-generation-options";
+import { normalizeVideoBoolean, normalizeVideoDuration, normalizeVideoResolution } from "@/lib/video-generation-options";
 import { defaultModelCapabilityConfig, workflowFieldRole, workflowFieldSafeToOverride, workflowVideoFieldsFromJson, type ModelCapabilityConfig } from "@/lib/model-capabilities";
 import { useUserStore } from "@/stores/use-user-store";
 import type { CapabilitySpec } from "@/services/api/logical-models";
+import { seedancePortraitLabel, seedancePortraitModel, type VideoPriceQuote } from "@/lib/seedance-portrait";
 
 export type ApiCallFormat = "openai" | "gemini" | "claude";
 export type ChannelInterfaceType = ModelProtocol;
@@ -350,6 +351,7 @@ export type ModelChannel = {
     publicAlias?: string;
     sortOrder?: number;
     baseUrl: string;
+    referenceAssetOrigin?: string;
     apiKey: string;
     secretKey?: string;
     headers?: ChannelHeader[];
@@ -376,6 +378,7 @@ export type ModelChannel = {
         protocol?: ModelProtocol;
         capabilityConfig?: ModelCapabilityConfig;
         videoCapabilitiesVersion?: string;
+        videoPricing?: VideoPriceQuote | null;
         logicalModelId?: string;
         logicalCapabilitySpec?: CapabilitySpec;
         logicalCapabilityProfiles?: CapabilitySpec[];
@@ -397,6 +400,8 @@ export type AiConfig = {
     videoModel: string;
     textModel: string;
     audioModel: string;
+    /** 画布助手模型；为空表示跟随 `textModel`。取值与其他默认模型一致，形如 `channelId::modelId`。 */
+    assistantModel: string;
     audioVoice: string;
     audioFormat: string;
     audioSpeed: string;
@@ -443,6 +448,7 @@ export const defaultConfig: AiConfig = {
     videoModel: "",
     textModel: "",
     audioModel: "",
+    assistantModel: "",
     audioVoice: "alloy",
     audioFormat: "mp3",
     audioSpeed: "1",
@@ -651,7 +657,7 @@ export const useConfigStore = create<ConfigStore>()(
         {
             name: CONFIG_STORE_KEY,
             storage: createJSONStorage(() => scopedLocalStorage),
-            partialize: (state) => ({ config: state.config }),
+            partialize: (state) => ({ config: configWithoutCachedSecrets(state.config) }),
             merge: (persisted, current) => {
                 const persistedState = (persisted || {}) as Partial<ConfigStore>;
                 return {
@@ -662,6 +668,17 @@ export const useConfigStore = create<ConfigStore>()(
         },
     ),
 );
+
+// The canonical local workspace restores credentials at startup. Browser
+// storage only caches presentation/preferences, never an extra plaintext copy.
+export function configWithoutCachedSecrets(config: AiConfig): AiConfig {
+    return {
+        ...config,
+        apiKey: "",
+        channels: config.channels.map((channel) => ({ ...channel, apiKey: "", secretKey: "", headers: [] })),
+        runningHub: { ...config.runningHub, apiKey: "", walletApiKey: "", uploadApiKey: "" },
+    };
+}
 
 export function normalizeConfigSnapshot(snapshot: ConfigStoreSnapshot | undefined = {}) {
     // 坏存储/旧版本快照可能是 undefined 或缺 config，兜底为 defaultConfig，保证渲染不崩溃
@@ -724,6 +741,9 @@ export function normalizeConfigSnapshot(snapshot: ConfigStoreSnapshot | undefine
             videoModel: normalizeSelectedModel(config.videoModel, channels, videoModels),
             textModel: normalizeSelectedModel(config.textModel || model, channels, textModels),
             audioModel: normalizeSelectedModel(config.audioModel || defaultConfig.audioModel, channels, audioModels),
+            // 助手模型允许为空（跟随默认文本模型），因此这里只保证类型，
+            // 协议与渠道有效性由 `lib/assistant-model` 在读取时裁决。
+            assistantModel: typeof config.assistantModel === "string" ? config.assistantModel.trim() : "",
             audioVoice: config.audioVoice || defaultConfig.audioVoice,
             audioFormat: config.audioFormat || defaultConfig.audioFormat,
             audioSpeed: config.audioSpeed || defaultConfig.audioSpeed,
@@ -734,9 +754,9 @@ export function normalizeConfigSnapshot(snapshot: ConfigStoreSnapshot | undefine
             systemPrompt: "",
             videoSeconds: normalizeVideoDuration(config.videoSeconds),
             vquality: normalizeVideoResolution(config.vquality),
-            videoGenerateAudio: config.videoGenerateAudio || "true",
-            videoWatermark: config.videoWatermark || "false",
-            videoArkPrivateAssetUpload: config.videoArkPrivateAssetUpload || "true",
+            videoGenerateAudio: normalizeVideoBoolean(config.videoGenerateAudio) ?? "true",
+            videoWatermark: normalizeVideoBoolean(config.videoWatermark) ?? "false",
+            videoArkPrivateAssetUpload: normalizeVideoBoolean(config.videoArkPrivateAssetUpload) ?? "true",
             transparentBackground: config.transparentBackground === "true" ? "true" : "false",
             canvasImageCount: config.canvasImageCount || defaultConfig.canvasImageCount,
             imageModels,
@@ -851,7 +871,11 @@ function enrichBeefApiMediaChannel(channel: ModelChannel): ModelChannel {
 
 function normalizeSelectedModel(value: string, channels: ModelChannel[], options: string[]) {
     const model = normalizeModelOptionValue(value, channels);
-    return model && options.includes(model) ? model : options[0] || "";
+    if (model && options.includes(model)) return model;
+    // Keep an explicit paid-tier choice visible when the catalog removes it.
+    // An ordinary/default choice must never select the paid tier implicitly.
+    if (seedancePortraitModel(value)) return value;
+    return options.find((option) => !seedancePortraitModel(option)) || "";
 }
 
 export function useEffectiveConfig() {
@@ -875,6 +899,7 @@ export function createModelChannel(channel?: Partial<ModelChannel>): ModelChanne
         name: channel?.name?.trim() || "新渠道",
         sortOrder: channel?.sortOrder ?? 0,
         baseUrl: providedBaseUrl || (interfaceType ? defaultBaseUrlForChannelInterface(interfaceType) : defaultBaseUrlForApiFormat(apiFormat)),
+        referenceAssetOrigin: channel?.referenceAssetOrigin?.trim() || undefined,
         apiKey: channel?.apiKey || "",
         secretKey: channel?.secretKey || "",
         headers: Array.isArray(channel?.headers) ? channel.headers.map((header) => ({ name: String(header.name || ""), value: String(header.value || "") })) : [],
@@ -911,6 +936,8 @@ export function modelOptionName(value: string) {
 }
 
 export function modelDisplayName(config: AiConfig, value: string) {
+	const portrait = seedancePortraitLabel(value);
+	if (portrait) return portrait;
     const model = modelOptionName(value);
     const channel = resolveModelChannel(config, value);
     const displayName = channel.modelProfiles?.find((item) => item.model === model)?.displayName?.trim();
@@ -957,11 +984,11 @@ export function normalizeModelOptionValue(value: unknown, channels: ModelChannel
     if (decoded) {
         const channel = channels.find((item) => item.id === decoded.channelId);
         const resolved = channel?.modelAliases?.[decoded.model] || decoded.model;
-        return channel && channel.models.includes(resolved) ? encodeChannelModel(channel.id, resolved) : "";
+        return channel && seedancePortraitModel(decoded.model) === seedancePortraitModel(resolved) && channel.models.includes(resolved) ? encodeChannelModel(channel.id, resolved) : "";
     }
     const channel = channels.find((item) => item.models.includes(model) || Boolean(item.modelAliases?.[model])) || channels[0];
     const resolved = channel?.modelAliases?.[model] || model;
-    return channel && channel.models.includes(resolved) ? encodeChannelModel(channel.id, resolved) : "";
+    return channel && seedancePortraitModel(model) === seedancePortraitModel(resolved) && channel.models.includes(resolved) ? encodeChannelModel(channel.id, resolved) : "";
 }
 
 export function resolveModelChannel(config: AiConfig, value: string) {
@@ -977,16 +1004,16 @@ export function logicalModelIDForConfig(config: AiConfig) {
 }
 
 export function channelConnectionSignature(channel: ModelChannel) {
-    return [channel.baseUrl.trim(), channel.apiKey.trim(), channel.secretKey?.trim() || "", channel.apiFormat, channel.interfaceType || "auto", JSON.stringify(channel.headers || [])].join("\n");
+    return [channel.baseUrl.trim(), channel.referenceAssetOrigin?.trim() || "", channel.apiKey.trim(), channel.secretKey?.trim() || "", channel.apiFormat, channel.interfaceType || "auto", JSON.stringify(channel.headers || [])].join("\n");
 }
 
 export function resolveModelRequestConfig(config: AiConfig, value: string) {
     const channel = resolveModelChannel(config, value);
     const model = modelOptionName(value || config.model);
     const modelProfile = channel.modelProfiles?.find((item) => item.model === model);
-    const modelProtocol = modelProfile?.protocol;
+    const modelProtocol = normalizeModelProtocol(modelProfile?.protocol);
     const interfaceType = modelProtocol
-        || channel.interfaceType
+        || normalizeModelProtocol(channel.interfaceType)
         || (channel.scope === "system" || !usesOpenAICompatibleProtocolDefault(channel.apiFormat)
             ? undefined
             : (modelProfile?.capability ? defaultProtocolForCapability(modelProfile.capability) : defaultProtocolForModel(model)));
@@ -994,10 +1021,11 @@ export function resolveModelRequestConfig(config: AiConfig, value: string) {
         ...config,
         model,
         baseUrl: channel.baseUrl,
+        referenceAssetOrigin: channel.referenceAssetOrigin,
         apiKey: channel.credentialRef ? "" : channel.apiKey,
         secretKey: channel.credentialRef ? "" : channel.secretKey,
         headers: channel.headers,
-        apiFormat: interfaceType ? (interfaceType === "gemini-veo" || interfaceType === "gemini-image" ? ("gemini" as const) : interfaceType === "claude-api" ? ("claude" as const) : ("openai" as const)) : channel.apiFormat,
+        apiFormat: interfaceType ? (interfaceType === "gemini-veo" || interfaceType === "gemini-image" || interfaceType === "gemini-generate-content" ? ("gemini" as const) : interfaceType === "claude-api" ? ("claude" as const) : ("openai" as const)) : channel.apiFormat,
         interfaceType,
         channelId: channel.scope === "system" ? channel.id : "",
         credentialRef: channel.credentialRef || (isBuiltinBeefAPIChannel(channel) ? MANAGED_BEEFAPI_CREDENTIAL_REF : undefined),

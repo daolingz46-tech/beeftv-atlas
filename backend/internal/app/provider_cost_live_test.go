@@ -22,7 +22,8 @@ func TestAtlasCostLive(t *testing.T) {
 	if key == "" || root == "" {
 		t.Skip("live free quote test not configured")
 	}
-	registry, _ := protocol.NewRegistry()
+	runtime := pluginRuntimeFromRecords(nil)
+	registry := runtime.registrySnapshot()
 	packages, _ := filepath.Glob(filepath.Join(root, "packages", "*.beeftv-plugin"))
 	for _, file := range packages {
 		body, err := os.ReadFile(file)
@@ -76,7 +77,7 @@ func TestAtlasCostLive(t *testing.T) {
 	if err := json.Unmarshal(videoJSON, &profiles); err != nil {
 		t.Fatal(err)
 	}
-	service := &Service{mode: serviceModeLocal, pluginRuntime: &pluginRuntime{registry: registry}}
+	service := &Service{mode: serviceModeLocal, pluginRuntime: runtime}
 	if os.Getenv("BEEFTV_ATLAS_COST_CATALOG_AUDIT") == "1" {
 		atlasAuditCostCatalog(t, service, key, plan.Groups)
 		return

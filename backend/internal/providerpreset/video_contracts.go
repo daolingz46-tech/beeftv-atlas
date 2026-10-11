@@ -32,7 +32,7 @@ var videoContracts = func() []VideoContract {
 
 func IsBeefAPIEndpoint(baseURL string) bool {
 	u, err := url.Parse(strings.TrimSpace(baseURL))
-	return err == nil && u.Scheme == "https" && strings.EqualFold(u.Hostname(), "enterprise.beefapi.com") && u.User == nil && (u.Port() == "" || u.Port() == "443")
+	return err == nil && u.Scheme == "https" && (strings.EqualFold(u.Hostname(), "enterprise.beefapi.com") || strings.EqualFold(u.Hostname(), "beeftv.app")) && u.User == nil && (u.Port() == "" || u.Port() == "443")
 }
 
 func BeefAPIVideoContract(model string) (VideoContract, bool) {
@@ -45,4 +45,18 @@ func BeefAPIVideoContract(model string) (VideoContract, bool) {
 		}
 	}
 	return VideoContract{}, false
+}
+
+// HostedBeefAPIVideoProfile overlays the official video route onto a stored
+// profile only when the channel talks to enterprise.beefapi.com. Custom
+// gateways keep their configured capability even if the model name matches.
+func HostedBeefAPIVideoProfile(baseURL, model string) (capability, protocol string, ok bool) {
+	if !IsBeefAPIEndpoint(baseURL) {
+		return "", "", false
+	}
+	contract, ok := BeefAPIVideoContract(model)
+	if !ok {
+		return "", "", false
+	}
+	return "video", contract.Protocol, true
 }

@@ -23,6 +23,18 @@ test("imported Atlas audio video profiles allow audio alone and a valid duration
     assert.deepEqual(video.operations, ["reference_to_video"]);
 });
 
+test("FullVideo full models accept one or two image references as well as mixed video references", () => {
+    for (const name of ["sd-native-full-2.0", "sd-native-full-2.5", "原生不卡人脸-全参2.0", "原生不卡人脸-全参2.5"]) {
+        const config = { channels: [{ id: "fullvideo", baseUrl: "https://video.example.com/v1", models: [name], modelProfiles: [{ model: name, capability: "video", protocol: "full-video" }] }] } as AiConfig;
+        for (const [imageCount, videoCount] of [[1, 0], [2, 0], [0, 1], [2, 1]]) {
+            assert.equal(modelCompatibilityError(config, `fullvideo::${name}`, {
+                capability: "video", videoSeconds: "5",
+                input: { textCount: 1, imageCount, videoCount, audioCount: 0, characterCount: 0 },
+            }), "");
+        }
+    }
+});
+
 test("switching to MiniMax H3 replaces an unsupported 720p value with 768P", () => {
     const profile = defaultModelCapabilityConfig("minimax-video", "MiniMax-H3").video!;
 

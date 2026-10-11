@@ -3,6 +3,7 @@ package workspace
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"infinite-canvas/backend/internal/providerpreset"
 )
@@ -19,10 +20,11 @@ const (
 )
 
 type ProviderStateDocument struct {
-	SchemaVersion  int            `json:"schemaVersion"`
-	Revision       int64          `json:"revision"`
-	PresetVersions map[string]int `json:"presetVersions"`
-	Config         map[string]any `json:"config"`
+	SchemaVersion                 int            `json:"schemaVersion"`
+	Revision                      int64          `json:"revision"`
+	PresetVersions                map[string]int `json:"presetVersions"`
+	Config                        map[string]any `json:"config"`
+	AssistantDefaultAuthorization string         `json:"assistantDefaultAuthorization,omitempty"`
 }
 
 type EffectiveModelConfig struct {
@@ -91,11 +93,82 @@ func mergeBuiltinProviderPresets(config map[string]any) (map[string]any, error) 
 	mergedChannels := make([]any, 0, len(order))
 	for _, id := range order {
 		if channel := channels[id]; channel != nil {
-			mergedChannels = append(mergedChannels, channel)
+			mergedChannels = append(mergedChannels, overlayHostedBeefAPIVideoProfiles(channel))
 		}
 	}
 	result["channels"] = mergedChannels
 	return result, nil
+}
+
+func overlayHostedBeefAPIVideoProfiles(channel map[string]any) map[string]any {
+	baseURL, _ := channel["baseUrl"].(string)
+	profiles, _ := channel["modelProfiles"].([]any)
+	seen := map[string]bool{}
+	next := make([]any, 0, len(profiles))
+	for _, raw := range profiles {
+		profile, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		model, _ := profile["model"].(string)
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		seen[model] = true
+		if capability, protocol, ok := providerpreset.HostedBeefAPIVideoProfile(baseURL, model); ok {
+			overlaid := cloneProfileMap(profile)
+			overlaid["capability"] = capability
+			overlaid["protocol"] = protocol
+			next = append(next, overlaid)
+			continue
+		}
+		next = append(next, profile)
+	}
+	for _, model := range channelModelIDs(channel["models"]) {
+		if seen[model] {
+			continue
+		}
+		capability, protocol, ok := providerpreset.HostedBeefAPIVideoProfile(baseURL, model)
+		if !ok {
+			continue
+		}
+		next = append(next, map[string]any{"model": model, "capability": capability, "protocol": protocol})
+	}
+	channel["modelProfiles"] = next
+	return channel
+}
+
+func cloneProfileMap(profile map[string]any) map[string]any {
+	cloned := make(map[string]any, len(profile))
+	for key, value := range profile {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func channelModelIDs(value any) []string {
+	switch items := value.(type) {
+	case []string:
+		ids := make([]string, 0, len(items))
+		for _, item := range items {
+			if model := strings.TrimSpace(item); model != "" {
+				ids = append(ids, model)
+			}
+		}
+		return ids
+	case []any:
+		ids := make([]string, 0, len(items))
+		for _, item := range items {
+			model, _ := item.(string)
+			if model = strings.TrimSpace(model); model != "" {
+				ids = append(ids, model)
+			}
+		}
+		return ids
+	default:
+		return nil
+	}
 }
 
 func presetChannelMap(preset providerpreset.ChannelPreset, local map[string]any) (map[string]any, error) {
@@ -146,6 +219,15 @@ func presetChannelMap(preset providerpreset.ChannelPreset, local map[string]any)
 	for _, key := range []string{"apiKey", "secretKey", "headers", "enabled"} {
 		if value, ok := local[key]; ok {
 			result[key] = value
+		}
+	}
+	if preset.ID == "beefapi" {
+		base, _ := local["baseUrl"].(string)
+		if base == "https://enterprise.beefapi.com" || base == "https://beeftv.app" {
+			result["baseUrl"] = base
+		} else if key, _ := local["apiKey"].(string); base == "" && key != "" {
+			// Pre-brand manual credentials without an origin were issued by BeefAPI.
+			result["baseUrl"] = "https://enterprise.beefapi.com"
 		}
 	}
 	return result, nil

@@ -3,6 +3,7 @@ import { configureApiRuntime } from "@/services/api/request";
 export type DesktopRuntimeConfig = {
     baseURL: string;
     launchToken: string;
+    uiBootstrapToken?: string;
 };
 
 export const DESKTOP_UPDATE_STATUSES = ["disabled", "idle", "checking", "available", "downloading", "ready", "installing", "error"] as const;
@@ -16,6 +17,8 @@ export type DesktopUpdateState = {
     releaseNotes: string;
     downloadedBytes: number;
     totalBytes: number;
+    bytesPerSecond: number;
+    reconnecting: boolean;
     error: string;
 };
 
@@ -28,6 +31,10 @@ export type DesktopRuntimeBinding = {
     CheckForUpdate?: () => Promise<DesktopUpdateState>;
     DownloadUpdate?: () => Promise<DesktopUpdateState>;
     InstallUpdate?: () => Promise<void>;
+    ConfirmUpdateStartup?: () => Promise<void>;
+    OpenBeefTVX?: () => Promise<void>;
+    OpenBeefTVWebsite?: () => Promise<void>;
+    OpenBeefTVGitHub?: () => Promise<void>;
 };
 
 declare global {
@@ -54,7 +61,7 @@ function isDesktopRuntimeConfig(value: unknown): value is DesktopRuntimeConfig {
 
 export function configureDesktopRuntime(config: DesktopRuntimeConfig) {
     const baseURL = config.baseURL.replace(/\/+$/u, "");
-    configureApiRuntime(baseURL, config.launchToken);
+    configureApiRuntime(baseURL, config.launchToken, config.uiBootstrapToken);
     if (!nativeFetch) nativeFetch = globalThis.fetch.bind(globalThis);
     globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
         const request = new Request(input, init);

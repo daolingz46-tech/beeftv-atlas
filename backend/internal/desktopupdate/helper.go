@@ -87,7 +87,14 @@ func RunHelperRequest(req HelperRequest) error {
 		}
 		_ = os.WriteFile(req.ResultPath, data, 0o600)
 	}
-	defer writeRecovery()
+	var releaseLock func()
+	defer func() {
+		// Startup cleanup must see the final record before it can take the lock.
+		writeRecovery()
+		if releaseLock != nil {
+			releaseLock()
+		}
+	}()
 
 	if err := validateHelperRequest(req); err != nil {
 		result.Error = err.Error()
@@ -98,7 +105,7 @@ func RunHelperRequest(req HelperRequest) error {
 		result.Error = "已有更新正在安装"
 		return err
 	}
-	defer unlock()
+	releaseLock = unlock
 	if req.PreparedPath != "" {
 		if err := os.WriteFile(req.PreparedPath, []byte("ok\n"), 0o600); err != nil {
 			result.Error = err.Error()
@@ -169,6 +176,10 @@ func validateHelperRequest(req HelperRequest) error {
 	case strings.HasPrefix(req.Platform, "windows"):
 		if filepath.Base(req.TargetPath) != windowsExeName {
 			return fmt.Errorf("当前应用名称不支持自动更新")
+		}
+	case req.Platform == "linux-amd64":
+		if filepath.Base(req.TargetPath) != linuxBundleName {
+			return fmt.Errorf("当前应用包名称不支持自动更新")
 		}
 	default:
 		return ErrUnsupported

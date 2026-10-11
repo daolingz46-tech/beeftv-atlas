@@ -17,6 +17,31 @@ permissions:
 # Core behavior checks run on every change. Formatting stays a local command.
 # Browser coverage lives in director-e2e.yml and runs for web changes or on demand.
 jobs:
+  released-windows-upgrades:
+    if: github.event_name == 'workflow_dispatch'
+    name: Published Windows upgrade and rollback
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download known final package
+        shell: pwsh
+        run: |
+          curl.exe -fLsS --retry 2 https://github.com/glanderness/BeefTV/releases/download/v1.7.2/BeefTV-v1.7.2-windows-amd64.zip -o candidate.zip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash candidate.zip -Algorithm SHA256).Hash.ToLower() -ne 'bb2cb4e152c7b2eb1d54adb7553c69d59aef755b242d2cbf0c14e7472a8b4f65') { throw 'Candidate hash mismatch' }
+      - name: Real released helpers, backend startup, SQLite and rollback
+        run: python scripts/test-windows-published-upgrade.py --archive candidate.zip --version v1.7.2 --output upgrade-evidence/results.json
+      - name: Preserve acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: released-windows-upgrade-evidence
+          path: upgrade-evidence/
+
   release-publisher:
     name: Release publisher checks
     runs-on: ubuntu-latest
@@ -40,6 +65,23 @@ jobs:
           go-version-file: backend/go.mod
           cache: true
           cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.15.0'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - name: Install agent host dependencies
+        working-directory: agent-host
+        run: bun install --frozen-lockfile
+      - name: Install native media test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fontconfig fonts-noto-cjk
+          fc-cache -f
+          fc-match ':lang=zh-cn'
+          ffmpeg -version
+          ffprobe -version
       - name: Build official protocol packages
         run: sh ../plugin-packages/build-packages.sh
       - name: Run Go tests
@@ -59,6 +101,12 @@ jobs:
           bun-version: 1.3.9
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      - name: Install native media test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version
+          ffprobe -version
       - name: Lint retired Ant Design APIs
         run: bun run lint
       - name: Typecheck
@@ -69,3 +117,70 @@ jobs:
         run: |
           bunx playwright install --with-deps chromium
           bun run test
+
+  database-platforms:
+    if: github.event_name == 'workflow_dispatch'
+    name: SQLite and runtime (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+        working-directory: backend
+    env:
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Select runner C compiler on Windows
+        if: runner.os == 'Windows'
+        run: echo 'C:/msys64/mingw64/bin' >> "$GITHUB_PATH"
+      - name: Record actual platform and SQLite driver
+        run: |
+          mkdir -p matrix-evidence
+          go version | tee matrix-evidence/platform.txt
+          go env GOOS GOARCH CGO_ENABLED CC | tee -a matrix-evidence/platform.txt
+          gcc --version | head -1 | tee -a matrix-evidence/platform.txt
+          go list -m gorm.io/driver/sqlite github.com/mattn/go-sqlite3 | tee -a matrix-evidence/platform.txt
+      - name: Build official protocol packages
+        if: runner.os != 'Windows'
+        run: sh ../plugin-packages/build-packages.sh
+      - name: Build official protocol packages with runner Python on Windows
+        if: runner.os == 'Windows'
+        run: |
+          node ../plugin-packages/embed-documentation.mjs
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile, ZIP_DEFLATED
+          root = Path('../plugin-packages')
+          for manifest in sorted(root.glob('*/manifest.json')):
+              package = manifest.parent
+              files = []
+              for name in ['manifest.json', 'README.md', 'docs', 'assets', 'web', 'backend', 'LICENSE']:
+                  source = package / name
+                  files.extend([source] if source.is_file() else [item for item in source.rglob('*') if item.is_file()])
+              with ZipFile(root / (package.name + '.beeftv-plugin'), 'w', ZIP_DEFLATED) as archive:
+                  for source in sorted(files):
+                      archive.write(source, source.relative_to(package).as_posix())
+          PY
+      - name: Historical SQLite, schema repair and interrupted migration
+        run: go test ./internal/database -count=1 -json | tee matrix-evidence/database.jsonl
+      - name: Native updater replacement, recovery, cleanup and install locks
+        run: go test ./internal/desktopupdate -count=1 -json | tee matrix-evidence/desktopupdate.jsonl
+      - name: Local provider task persistence and restart matrix
+        run: go test ./internal/app -run '^TestDBRuntime' -count=1 -json | tee matrix-evidence/runtime.jsonl
+      - name: Actual CLI, MCP startup and native process lifecycle
+        run: go test ./cmd/beeftv ./internal/runtimeinfo ./internal/assistantruntime -count=1 -json | tee matrix-evidence/cli-mcp.jsonl
+      - name: Preserve per-test results and platform evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: database-matrix-${{ runner.os }}-${{ github.sha }}
+          path: backend/matrix-evidence/

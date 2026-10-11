@@ -50,7 +50,7 @@ class GenerationRequest(BaseModel):
 
 
 SETTING_NAMES = {'size', 'quality', 'imageResolution', 'transparentBackground', 'videoSeconds', 'vquality', 'videoGenerateAudio', 'videoWatermark', 'audioVoice', 'audioFormat', 'audioSpeed', 'audioInstructions', 'systemPrompt'}
-SECRET_NAMES = {'apikey', 'secretkey', 'launchtoken', 'authorization', 'cookie', 'headers', 'credentialref', 'inputjson'}
+SECRET_NAMES = {'apikey', 'secretkey', 'launchtoken', 'ownertoken', 'authorization', 'cookie', 'headers', 'credentialref', 'inputjson'}
 
 
 @contextmanager
@@ -95,15 +95,29 @@ class Bridge:
 
     async def api(self, method, path, **kwargs):
         config = self.connection()
+        headers = self.local_headers(config, path)
         try:
             async with httpx.AsyncClient(transport=self.transport, trust_env=False, follow_redirects=False, timeout=50) as client:
-                response = await client.request(method, config['baseURL'] + path, headers={'X-Desktop-Token': config['launchToken']}, **kwargs)
+                response = await client.request(method, config['baseURL'] + path, headers=headers, **kwargs)
             body = response.json()
         except (httpx.HTTPError, ValueError):
             raise RuntimeError('BeefTV 连接中断；写操作没有自动重试，请查询任务后再决定是否重新提交') from None
         if response.status_code >= 300 or body.get('code') != 0:
             raise RuntimeError(str(self.redact(body.get('msg') or f'BeefTV API error {response.status_code}'))) from None
         return body.get('data')
+
+    def local_headers(self, config, path):
+        headers = {'X-Desktop-Token': config['launchToken']}
+        # The trusted local bridge reads provider configuration internally; its
+        # public tools redact it. Business writes use the official owner boundary.
+        owner_file = self.data_dir / 'agent_owner_token'
+        if path != '/workspace/model-config' and owner_file.exists():
+            owner = owner_file.read_text(encoding='utf-8').strip()
+            if not re.fullmatch(r'[a-f0-9]{64}', owner):
+                raise RuntimeError('Invalid local BeefTV owner credential')
+            self.secrets.add(owner)
+            headers['X-Beeftv-Owner'] = owner
+        return headers
 
     async def catalog(self):
         result = await self.api('GET', '/workspace/model-config')
@@ -244,7 +258,7 @@ class Bridge:
         created = False
         try:
             async with httpx.AsyncClient(transport=self.transport, trust_env=False, follow_redirects=False, timeout=60) as client:
-                async with client.stream('GET', url, headers={'X-Desktop-Token': config['launchToken']}) as response:
+                async with client.stream('GET', url, headers=self.local_headers(config, '/resources')) as response:
                     if response.status_code != 200: raise RuntimeError(f'Resource download failed ({response.status_code})')
                     with target.open('xb') as stream:
                         created = True

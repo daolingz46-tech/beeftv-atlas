@@ -264,7 +264,7 @@ func newOutboundTransport(resolveHost func(context.Context, string) ([]net.IP, e
 			if err != nil {
 				return nil, err
 			}
-			return dialValidatedIPs(ctx, network, port, addresses, dialer.DialContext)
+			return dialValidatedAddresses(ctx, network, port, addresses, dialer.DialContext)
 		},
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
@@ -275,12 +275,23 @@ func newOutboundTransport(resolveHost func(context.Context, string) ([]net.IP, e
 	}
 }
 
-// Race only already validated addresses; resolving the hostname again here
-// would reopen DNS rebinding. An unreachable first address must not block all
-// alternatives (for example, IPv6 DNS on a computer without an IPv6 route).
-func dialValidatedIPs(ctx context.Context, network, port string, addresses []net.IP, dial func(context.Context, string, string) (net.Conn, error)) (net.Conn, error) {
+// Race only the addresses already checked by the outbound policy. Resolving the
+// hostname again in net.Dialer would reopen the DNS-rebinding boundary. Stagger
+// attempts so a broken IPv6 route cannot hide a working IPv4 route.
+func dialValidatedAddresses(ctx context.Context, network, port string, addresses []net.IP, dial func(context.Context, string, string) (net.Conn, error)) (net.Conn, error) {
 	if len(addresses) == 0 {
-		return nil, errors.New("no validated upstream address")
+		return nil, errors.New("outbound host has no validated addresses")
+	}
+	ordered := []net.IP{addresses[0]}
+	// Put the other address family second, preserving order within each family.
+	firstV4 := addresses[0].To4() != nil
+	for _, opposite := range []bool{true, false} {
+		for _, ip := range addresses[1:] {
+			otherFamily := (ip.To4() != nil) != firstV4
+			if otherFamily == opposite {
+				ordered = append(ordered, ip)
+			}
+		}
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -289,10 +300,10 @@ func dialValidatedIPs(ctx context.Context, network, port string, addresses []net
 		err  error
 	}
 	results := make(chan result)
-	for index, ip := range addresses {
-		go func(index int, ip net.IP) {
-			if index > 0 {
-				timer := time.NewTimer(time.Duration(index) * 200 * time.Millisecond)
+	for i, ip := range ordered {
+		go func(delay time.Duration, ip net.IP) {
+			if delay > 0 {
+				timer := time.NewTimer(delay)
 				defer timer.Stop()
 				select {
 				case <-timer.C:
@@ -308,21 +319,23 @@ func dialValidatedIPs(ctx context.Context, network, port string, addresses []net
 					_ = conn.Close()
 				}
 			}
-		}(index, ip)
+		}(time.Duration(i)*250*time.Millisecond, ip)
 	}
-	var lastErr error
-	for range addresses {
+	var firstErr error
+	for range ordered {
 		select {
+		case r := <-results:
+			if r.err == nil {
+				return r.conn, nil
+			}
+			if firstErr == nil {
+				firstErr = r.err
+			}
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case result := <-results:
-			if result.err == nil {
-				return result.conn, nil
-			}
-			lastErr = result.err
 		}
 	}
-	return nil, lastErr
+	return nil, firstErr
 }
 
 func outboundProxyFromEnvironment(req *http.Request) (*url.URL, error) {
@@ -330,6 +343,10 @@ func outboundProxyFromEnvironment(req *http.Request) (*url.URL, error) {
 		return nil, nil
 	}
 	return httpproxy.FromEnvironment().ProxyFunc()(req.URL)
+}
+
+func dialValidatedIPs(ctx context.Context, network, port string, addresses []net.IP, dial func(context.Context, string, string) (net.Conn, error)) (net.Conn, error) {
+	return dialValidatedAddresses(ctx, network, port, addresses, dial)
 }
 
 func configuredProxyHost(host string) bool {

@@ -42,12 +42,14 @@ func newRetiredAgentHarness(t *testing.T) retiredAgentHarness {
 	if err := database.MigrateLocalSchema(db); err != nil {
 		t.Fatal(err)
 	}
+	closeTestDatabaseOnCleanup(t, db)
 	// 本地工作区主体必须存在；路由中间件用 ID 解析当前用户。
 	if err := db.Create(&model.Workspace{ID: "local", Name: "本地工作区"}).Error; err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
 	svc := app.NewLocal(repository.New(db), dir)
+	t.Cleanup(func() { _ = svc.Close() })
 	router := gin.New()
 	router.Use(WorkspaceMiddleware(workspace.Context{ID: "local", DataDir: dir}))
 	RegisterDesktopCanvasAPIWithDependencies(router.Group("/api"), svc, defaultRuntimeDependencies(svc))
@@ -80,7 +82,9 @@ func (h retiredAgentHarness) do(t *testing.T, method, path string, body any) *ht
 func TestRetiredAgentEndpointsAreAbsentFromProductRouteGraph(t *testing.T) {
 	harness := newRetiredAgentHarness(t)
 	for _, route := range harness.router.Routes() {
-		if strings.Contains(route.Path, "/agent") {
+		// 退场的是旧内置 Agent 的 /api/agent/* 运行面。
+		// /api/agent-clients 是另一回事：外部 Agent 的凭据签发与吊销，只对受信任的桌面界面开放。
+		if route.Path == "/api/agent" || strings.HasPrefix(route.Path, "/api/agent/") {
 			t.Fatalf("旧 Agent 入口仍在产品路由图中: %s %s", route.Method, route.Path)
 		}
 	}
