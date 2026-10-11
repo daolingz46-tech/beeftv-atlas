@@ -10,7 +10,8 @@ export async function modelFixture(directory, selected, available, onRequest = (
   const server = createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw); requests.push(body.model); payloads.push(body);
-    await onRequest(body);
+    await onRequest(body, res);
+    if (res.writableEnded) return;
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     const frame = (delta, finish_reason = null) => res.write('data: ' + JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', choices: [{ index: 0, delta, finish_reason }] }) + '\n\n');
     frame({ role: 'assistant', content: `Actual ${body.model} reply` }); frame({}, 'stop'); res.end('data: [DONE]\n\n');

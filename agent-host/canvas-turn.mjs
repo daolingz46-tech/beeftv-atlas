@@ -4,6 +4,8 @@
 // 供应商定义同样放在这里：协议决定用哪个 pi-ai 适配器，宿主不再假设一切都是
 // OpenAI 兼容接口，地址形状由后端按协议整理好后下发。
 
+import { providerFailure } from './provider-failure.mjs';
+
 export const SUPPORTED_APIS = ['openai-completions', 'openai-responses', 'anthropic-messages'];
 
 export function newTurnAccumulator() {
@@ -194,9 +196,9 @@ export function modelTurnCompletion(lastAssistantMessage, promptError = null, bu
   if (budgetFailure) return { reply, error: budgetFailure.message, errorReason: budgetFailure.reason };
   if (timedOut) return { reply, error: '这一轮处理超时，已停止继续执行。', errorReason: 'turn_timeout' };
   if (cancelled) return { reply, error: null, errorReason: null };
-  if (promptError) return { reply, error: String(promptError), errorReason: 'model_request_failed' };
+  if (promptError) return { reply, ...providerFailure(String(promptError), 'model_request_failed') };
   if (lastAssistantMessage?.stopReason === 'error') {
-    return { reply, error: lastAssistantMessage.errorMessage || '模型调用没有完成', errorReason: 'model_request_failed' };
+    return { reply, ...providerFailure(lastAssistantMessage.errorMessage || '模型调用没有完成', 'model_request_failed') };
   }
   return { reply, error: null, errorReason: null };
 }
@@ -228,6 +230,7 @@ export function projectTurnHistory(entries, turnType, activeTurnId = '') {
     .filter((entry) => entry.finished || entry.data.turnId !== activeTurnId)
     .map((entry) => {
       const accepted = supplements.get(entry.data.turnId) || entry.data.supplements;
-      return accepted ? { ...entry.data, supplements: accepted } : entry.data;
+      const data = entry.data.error ? { ...entry.data, ...providerFailure(entry.data.error, entry.data.errorReason) } : entry.data;
+      return accepted ? { ...data, supplements: accepted } : data;
     });
 }

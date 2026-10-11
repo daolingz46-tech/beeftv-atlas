@@ -152,6 +152,20 @@ export function agentAssistantFailureText(reason: string | undefined, fallback =
             return "当前配置的总调用预算已用完，请检查助手运行配置。已落地的改动会保留。";
         case "request_budget_storage_unavailable":
             return "预算记录无法读取或保存，已停止继续调用。请检查磁盘空间和数据目录权限；仍失败时，请从有效备份恢复预算记录后重启助手。";
+        case "provider_insufficient_balance":
+            return "当前模型渠道余额或试用额度不足。请在渠道商处补充额度，或在下方模型菜单更换渠道后再发送。已完成的改动会保留。";
+        case "provider_auth_failed":
+            return "当前模型渠道的 API Key 无效或已过期。请在模型设置中更新密钥，或在下方模型菜单更换渠道后再发送。已完成的改动会保留。";
+        case "provider_access_denied":
+            return "当前模型渠道拒绝访问。请检查密钥权限和模型开通状态，或更换渠道后再发送。已完成的改动会保留。";
+        case "provider_invalid_request":
+            return "当前模型渠道拒绝了请求参数。请检查模型与协议设置，或更换模型后再发送。已完成的改动会保留。";
+        case "provider_model_not_found":
+            return "当前渠道找不到这个模型或接口。请检查模型名称与接口地址，或更换模型后再发送。已完成的改动会保留。";
+        case "provider_rate_limited":
+            return "当前模型渠道请求过于频繁，请稍后再继续。已完成的改动会保留。";
+        case "provider_unavailable":
+            return "当前模型渠道服务暂时不可用，请稍后再继续或更换渠道。已完成的改动会保留。";
         case "model_error":
         case "provider_error":
             return "模型没有完成回复。已经完成的操作会保留，请检查结果后再继续。";

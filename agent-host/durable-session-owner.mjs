@@ -11,6 +11,7 @@ import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite
 import { canvasKey } from './session-owner.mjs';
 import { newTurnAccumulator, resetTurnAccumulator, turnChange, sessionTitle } from './canvas-turn.mjs';
 import { SYSTEM_PROMPT } from './full-control-loader.mjs';
+import { providerFailure } from './provider-failure.mjs';
 
 export const DURABLE_VERSION = '1.0.4';
 const STATE = defineDoc({ kind: 'beeftv.host', version: 1, scope: 'session',
@@ -37,6 +38,7 @@ export function publicDurableTurn(active, running = false) {
     'references', 'supplements', 'supplementInputs', 'createdAt', 'reply', 'toolCalls', 'change', 'proposals',
     'cancelled', 'error', 'errorReason', 'sessionId', 'status'];
   const result = Object.fromEntries(keys.filter((key) => active[key] !== undefined).map((key) => [key, active[key]]));
+  if (result.error) Object.assign(result, providerFailure(result.error, result.errorReason));
   if (running) { delete result.toolCalls; result.status = 'running'; }
   return result;
 }
@@ -45,10 +47,10 @@ export function durableCompletion(settled, assistant, budgetFailure, stopped = f
   const text = assistant?.content?.filter((block) => block.type === 'text').map((block) => block.text).join('') || '';
   if (cancelled) return { reply: text, cancelled, error: null, errorReason: null };
   if (settled.status !== 'done') return { reply: '', cancelled: false,
-    error: String(budgetFailure?.message || settled.detail || settled.reason || 'agent_run_failed'),
-    errorReason: budgetFailure?.reason || settled.reason || 'agent_run_failed' };
+    ...providerFailure(String(budgetFailure?.message || settled.detail || settled.reason || 'agent_run_failed'),
+      budgetFailure?.reason || settled.reason || 'agent_run_failed') };
   if (!assistant || ['error', 'aborted'].includes(assistant.stopReason)) return { reply: '', cancelled: false,
-    error: assistant?.errorMessage || 'agent_answer_missing', errorReason: 'provider_error' };
+    ...providerFailure(assistant?.errorMessage || 'agent_answer_missing', 'provider_error') };
   return { reply: assistant.content?.filter((block) => block.type === 'text').map((block) => block.text).join('') || '',
     cancelled: false, error: null, errorReason: null };
 }

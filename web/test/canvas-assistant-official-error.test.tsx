@@ -56,3 +56,23 @@ test("unknown and fatal policy failures retain existing conservative action elig
     expect(agentAssistantFailureText("unrecognized_reason", "fallback")).toBe("fallback");
     expect(assistantTurnCanContinue("turn_timeout")).toBe(true);
 });
+
+test("balance, key and configuration failures show the remedy without blindly continuing or losing completed work", () => {
+    for (const reason of ["provider_insufficient_balance", "provider_auth_failed", "provider_access_denied", "provider_invalid_request", "provider_model_not_found"]) {
+        const turn = makeTurn(reason);
+        const html = renderToStaticMarkup(<CanvasAssistantTurnView turn={turn} handledProposals={new Set(["confirmed-proposal"])} onLocate={() => {}} onUndo={() => {}} onRunProposal={() => {}} onDismissProposal={() => {}} onContinue={() => { throw Error("must not submit"); }} />);
+        expect(assistantTurnCanContinue(reason)).toBe(false);
+        expect(html).toContain("更换");
+        expect(html).toContain("已完成的改动会保留");
+        expect(html).toContain("新建 1 个节点");
+        expect(html).toContain("已开始生成");
+        expect(html).not.toContain("继续处理");
+        expect(html).not.toContain("Request timed out");
+        expect(html).not.toContain("模型没有完成回复");
+    }
+    expect(agentAssistantFailureText("provider_insufficient_balance")).toContain("余额或试用额度不足");
+    for (const reason of ["provider_rate_limited", "provider_unavailable"]) {
+        expect(assistantTurnCanContinue(reason)).toBe(true);
+        expect(agentAssistantFailureText(reason)).toContain("稍后");
+    }
+});
