@@ -61,6 +61,13 @@ func (c *Runtime) importLegacyRegistry() ([]RegistryRecord, error) {
 	if err != nil {
 		return nil, fmt.Errorf("读取遗留插件 registry 失败：%w", err)
 	}
+	// Earlier Atlas imports used "user" for locally installed packages. Map that
+	// legacy label to uploaded before validation, without granting official trust.
+	for i := range records {
+		if strings.TrimSpace(records[i].Source) == "user" {
+			records[i].Source = OriginUploaded
+		}
+	}
 	return records, nil
 }
 

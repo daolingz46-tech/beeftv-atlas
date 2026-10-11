@@ -57,6 +57,15 @@ func newSQLitePluginEnv(t *testing.T) (string, Store, *repository.Repository) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	pool, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := pool.Close(); err != nil {
+			t.Errorf("close plugin test database: %v", err)
+		}
+	})
 	if err := db.AutoMigrate(&model.SystemSetting{}, &model.PluginPlatformState{}, &model.UserPluginState{}); err != nil {
 		t.Fatal(err)
 	}
