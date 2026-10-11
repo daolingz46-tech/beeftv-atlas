@@ -1,3 +1,5 @@
+import atlasAudioProfiles from "./atlas-audio-profiles.json";
+
 export const audioVoiceOptions = [
     { value: "alloy", label: "Alloy" },
     { value: "ash", label: "Ash" },
@@ -46,7 +48,7 @@ export const minimaxSpeechVoiceOptions = [
     { value: "audiobook_female_2", label: "女有声书 2" },
 ];
 
-export type AudioSpeechKind = "openai" | "minimax-speech" | "minimax-music";
+export type AudioSpeechKind = "openai" | "minimax-speech" | "minimax-music" | "atlas";
 
 export type AudioSpeechProfile = {
     kind: AudioSpeechKind;
@@ -62,6 +64,7 @@ export type AudioSpeechProfile = {
     showPitch: boolean;
     showVolume: boolean;
     showInstructions: boolean;
+    showFormat?: boolean;
 };
 
 const OPENAI_SPEECH_VOICES = new Set(audioVoiceOptions.map((item) => item.value));
@@ -80,6 +83,11 @@ export function audioSpeechKind(model: string): AudioSpeechKind {
 }
 
 export function audioSpeechProfile(model = ""): AudioSpeechProfile {
+    const atlas = atlasAudioProfiles[audioModelId(model) as keyof typeof atlasAudioProfiles];
+    if (atlas) return {
+        ...atlas, kind: "atlas", speedOptions: ["0.75", "1", "1.25", "1.5", "2"].filter((value) => Number(value) >= atlas.speedMin && Number(value) <= atlas.speedMax),
+        showVoice: atlas.voices.length > 0, showPitch: false, showVolume: false, showInstructions: false,
+    };
     const kind = audioSpeechKind(model);
     if (kind === "minimax-speech") {
         return {
@@ -137,6 +145,7 @@ export function normalizeAudioVoiceValue(value: string, model?: string) {
     if (!profile.showVoice) return "";
     const trimmed = String(value || "").trim();
     if (profile.voices.some((item) => item.value === trimmed)) return trimmed;
+    if (profile.kind === "atlas") return profile.defaultVoice;
     if (profile.kind === "minimax-speech") {
         if (!trimmed || OPENAI_SPEECH_VOICES.has(trimmed) || trimmed === "中文") return profile.defaultVoice;
         return trimmed;

@@ -57,6 +57,7 @@ export function imageQualityForTier(profile: ImageCapabilityConfig, tier: ImageR
 }
 
 export function imageResolutionUsesQuality(profile: ImageCapabilityConfig) {
+    if (profile.resolution) return false;
     return profile.size.parameter === "aspect_ratio" && IMAGE_RESOLUTIONS.some((tier) => imageQualityForTier(profile, tier));
 }
 
@@ -64,6 +65,7 @@ export function imageTierAvailable(profile: ImageCapabilityConfig, tier: ImageRe
     // 质量参数能映射档位时按上游质量裁剪；管理员尺寸预设存在时再取交集，避免默认 low/medium/high 把未启用的 1K 显示出来。
     if (profile.size.parameter !== "aspect_ratio") return profile.size.parameter !== "none";
     const configuredTiers = new Set(profile.size.presets?.map((preset) => preset.tier));
+    if (profile.resolution?.supported) return profile.resolution.values.some((value) => value.toLowerCase() === tier) && (!configuredTiers.size || configuredTiers.has(tier));
     if (imageResolutionUsesQuality(profile)) {
         if (!imageQualityForTier(profile, tier)) return false;
         return configuredTiers.size ? configuredTiers.has(tier) : true;
@@ -75,6 +77,7 @@ export function imageTierAvailable(profile: ImageCapabilityConfig, tier: ImageRe
 }
 
 export function imageQualityForSelection(profile: ImageCapabilityConfig, tier: ImageResolutionTier) {
+    if (profile.resolution) return undefined;
     return imageQualityForTier(profile, tier) || (!imageResolutionUsesQuality(profile) && imageTierAvailable(profile, tier) ? tier : undefined);
 }
 
@@ -82,7 +85,7 @@ export function imageSizePresets(profile: ImageCapabilityConfig): ImageResolutio
     if (profile.size.parameter === "none") return [];
     if (profile.size.presets) return profile.size.presets;
     const pixels = buildImageResolutionOptions(profile.size.values);
-    const tiers = profile.size.parameter === "aspect_ratio" ? IMAGE_RESOLUTIONS.filter((tier) => imageQualityForTier(profile, tier)) : [];
+    const tiers = profile.size.parameter === "aspect_ratio" ? IMAGE_RESOLUTIONS.filter((tier) => profile.resolution?.supported ? profile.resolution.values.some((value) => value.toLowerCase() === tier) : imageQualityForTier(profile, tier)) : [];
     const ratios = tiers.flatMap((tier) =>
         profile.size.values.flatMap((ratio) => {
             try {

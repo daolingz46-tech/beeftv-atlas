@@ -39,7 +39,7 @@ export function AudioSettingsPanel({ config, onConfigChange, theme, showTitle = 
                         </div>
                     </SettingGroup>
                 ) : null}
-                <SettingGroup title="格式" color={theme.node.muted}>
+                {profile.showFormat !== false ? <SettingGroup title="格式" color={theme.node.muted}>
                     <div className="grid grid-cols-3 gap-2.5">
                         {profile.formats.map((item) => (
                             <OptionPill key={item.value} selected={format === item.value} theme={theme} onClick={() => onConfigChange("audioFormat", item.value)}>
@@ -47,7 +47,7 @@ export function AudioSettingsPanel({ config, onConfigChange, theme, showTitle = 
                             </OptionPill>
                         ))}
                     </div>
-                </SettingGroup>
+                </SettingGroup> : null}
                 {profile.showSpeed ? (
                     <SettingGroup title="语速" color={theme.node.muted}>
                         <div className="grid grid-cols-4 gap-2.5">

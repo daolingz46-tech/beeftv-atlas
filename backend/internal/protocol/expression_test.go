@@ -7,6 +7,22 @@ import (
 	"testing"
 )
 
+func TestManifestProviderOptionsNamespaceValues(t *testing.T) {
+	request := GenerationRequest{ProviderOptions: map[string]map[string]any{
+		"atlas-model-example": {"seed": 1234, "watermark": false, "offset": 0},
+	}}
+	env := map[string]any{"request": manifestRequestValues(request)}
+	for _, tc := range []struct {
+		field string
+		want  any
+	}{{"seed", 1234}, {"watermark", false}, {"offset", 0}} {
+		value, err := evaluateManifestValue(map[string]any{"$ref": "request.providerOptions.atlas-model-example." + tc.field}, env)
+		if err != nil || value != tc.want {
+			t.Fatalf("%s = %#v, want %#v; %v", tc.field, value, tc.want, err)
+		}
+	}
+}
+
 func TestEvaluateManifestSplitToFloatDivide(t *testing.T) {
 	env := map[string]any{"request": map[string]any{"aspectRatio": "1280x720"}}
 	parts, err := evaluateManifestValue(map[string]any{"$split": []any{map[string]any{"$ref": "request.aspectRatio"}, "x"}}, env)

@@ -53,16 +53,23 @@ func (s *Service) EstimateGenerationCost(ctx context.Context, userID string, raw
 		return nil, BadAuthRequest("缺少 Atlas Cloud 密钥或模型")
 	}
 	input.Config = config
+	if input.Mode == "image" {
+		if err := s.validateResolvedImageCapability(&input); err != nil {
+			return nil, err
+		}
+	}
 	ctx, cancel := context.WithTimeout(withProtocolRegistry(ctx, s.protocolRegistry()), 35*time.Second)
 	defer cancel()
 	if input.Mode == "text" && config.InterfaceType == "atlascloud-chat" {
 		return s.estimateAtlasTextCost(ctx, config, input)
 	}
+	// Native image interfaces use catalog token rates even when their generation
+	// adapters are installed; those adapters do not define Atlas pricing bodies.
+	if input.Mode == "image" && (config.InterfaceType == "openai-image" || config.InterfaceType == "gemini-image") {
+		return s.estimateAtlasNativeImageCost(ctx, userID, input)
+	}
 	adapter, exists := declarativeProtocolAdapterForContext(ctx, config.InterfaceType)
 	if !exists {
-		if input.Mode == "image" && (config.InterfaceType == "openai-image" || config.InterfaceType == "gemini-image") {
-			return s.estimateAtlasNativeImageCost(ctx, userID, input)
-		}
 		return nil, BadAuthRequest("该模型的费用预估适配器未安装")
 	}
 	if err := s.hydrateVideoReferenceMetadata(userID, &input); err != nil {

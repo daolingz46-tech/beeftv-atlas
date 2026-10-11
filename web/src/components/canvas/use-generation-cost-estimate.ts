@@ -9,13 +9,12 @@ import { useAssetStore } from "@/stores/use-asset-store";
 import type { CanvasNodeData } from "@/types/canvas";
 import type { BackendGenerationMode } from "@/services/api/generation-task";
 import { getGenerationCount } from "@/lib/canvas/canvas-project-generation";
-import { buildPortraitTexturePrompt } from "@/lib/canvas/canvas-portrait-texture";
-import { buildCameraPrompt } from "@/lib/canvas/camera-prompt-library";
-import { buildTextRewritePrompt } from "@/lib/prompts";
+import { buildCanvasGenerationPrompt, prepareCanvasGenerationContent } from "@/services/canvas-generation-preparation";
+import type { Skill } from "@/services/api/skills";
 
 type QuoteState = { key: string; status: "loading" | "ready" | "error"; quote?: ModelCostEstimate; error?: string };
 
-export function useGenerationCostEstimate(projectId: string, node: CanvasNodeData, config: AiConfig, prompt: string, mode: BackendGenerationMode) {
+export function useGenerationCostEstimate(projectId: string, node: CanvasNodeData, config: AiConfig, prompt: string, mode: BackendGenerationMode, addedSkills: Skill[]) {
     const project = useCanvasStore((state) => state.projects.find((item) => item.id === projectId));
     const assets = useAssetStore((state) => state.assets);
     const request = resolveModelRequestConfig(config, config.model);
@@ -25,19 +24,15 @@ export function useGenerationCostEstimate(projectId: string, node: CanvasNodeDat
     const context = useMemo(() => {
         if (!atlas || !prompt.trim()) return null;
         try {
-            let generationPrompt = mode === "image" && node.metadata?.portraitTexture ? buildPortraitTexturePrompt(prompt.trim(), node.metadata.portraitTexture) : prompt.trim();
-            if (mode === "image" && node.metadata?.cameraControl?.enabled) {
-                const camera = node.metadata.cameraControl;
-                generationPrompt += `\n${buildCameraPrompt({ cameraId: camera.camera, lensId: camera.lens, focalLengthMm: camera.focalLength, apertureF: camera.aperture })}`;
-            }
-            if (mode === "text" && node.metadata?.content?.trim()) generationPrompt = buildTextRewritePrompt(node.metadata.content.trim(), generationPrompt);
+            const generationPrompt = buildCanvasGenerationPrompt(node, prompt.trim(), mode);
             return { value: buildNodeGenerationContext(node.id, project?.nodes || [node], project?.connections || [], generationPrompt, assets, mode === "video") };
         } catch (error) { return { error: error instanceof Error ? error.message : "参考素材未准备完成" }; }
     }, [atlas, prompt, node, project, assets, mode]);
     const metadata = { videoEditOperation: node.metadata?.videoEditOperation, videoStartFrameNodeId: node.metadata?.videoStartFrameNodeId, videoEndFrameNodeId: node.metadata?.videoEndFrameNodeId };
-    const key = atlas && prompt.trim() ? JSON.stringify({ mode, count, context, config: backendProviderConfig(config, mode), metadata }) : "";
-    const current = useRef({ context, config, metadata, project, mode, count });
-    current.current = { context, config, metadata, project, mode, count };
+    const styleNode = project?.nodes.find((item) => item.metadata?.workflowKind === "styleboard");
+    const key = atlas && prompt.trim() ? JSON.stringify({ mode, count, context, config: backendProviderConfig(config, mode), metadata, skills: addedSkills.map(({ skillId, skillName, isAdded, versionId, contentHash, updatedAt }) => ({ skillId, skillName, isAdded, versionId, contentHash, updatedAt })), style: styleNode ? { title: styleNode.title, metadata: styleNode.metadata } : undefined }) : "";
+    const current = useRef({ context, config, metadata, project, mode, count, node, addedSkills });
+    current.current = { context, config, metadata, project, mode, count, node, addedSkills };
     const [state, setState] = useState<QuoteState | null>(null);
     const [retry, setRetry] = useState(0);
     const quotes = useRef(new Map<string, { expires: number; quote: ModelCostEstimate }>());
@@ -51,17 +46,13 @@ export function useGenerationCostEstimate(projectId: string, node: CanvasNodeDat
         setState({ key, status: "loading" });
         const timer = window.setTimeout(async () => {
             try {
-                const { context, config, metadata, project, mode, count } = current.current;
+                const { context, config, metadata, project, mode, count, node, addedSkills } = current.current;
                 if (!context?.value) throw new Error(context?.error || "请先准备参考素材");
                 const limits = modelGroupReferenceLimits(config, config.model, mode);
                 const hydrated = await hydrateNodeGenerationContext(context.value, projectId, project?.projectId, mode, mode === "video" && Boolean(limits?.maxAudios), mode !== "video", limits, true);
-                let quoteConfig = mode === "image" ? { ...config, count: "1" } : config;
-                if (mode === "audio" && hydrated.characterReferences.length) {
-                    const voice = hydrated.resolvedCharacterVoices[0];
-                    if (hydrated.characterReferences.length !== 1 || !voice) throw new Error("角色配音需要单个已绑定声音的角色卡");
-                    quoteConfig = { ...quoteConfig, audioVoice: voice.voiceKey, audioInstructions: [voice.instructions, config.audioInstructions].filter(Boolean).join("；") };
-                }
-                const task = await prepareBackendGenerationTask({ projectId, mode, prompt: hydrated.prompt, config: quoteConfig, referenceImages: hydrated.referenceImages, referenceVideos: hydrated.referenceVideos, referenceAudios: hydrated.referenceAudios, metadata, signal: controller.signal });
+                const prepared = await prepareCanvasGenerationContent({ context: hydrated, config, nodes: project?.nodes || [node], sourceNode: node, mode, skills: addedSkills });
+                const quoteConfig = mode === "image" ? { ...prepared.generationConfig, count: "1" } : prepared.generationConfig;
+                const task = await prepareBackendGenerationTask({ projectId, mode, prompt: prepared.effectivePrompt, config: quoteConfig, referenceImages: hydrated.referenceImages, referenceVideos: hydrated.referenceVideos, referenceAudios: hydrated.referenceAudios, metadata: { ...metadata, ...prepared.styleMetadata, ...prepared.skillMetadata }, signal: controller.signal });
                 const quote = await estimateModelCost(task.input, controller.signal);
                 if (!controller.signal.aborted) {
                     const total = { ...quote, price: quote.price * count };

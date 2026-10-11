@@ -12,6 +12,11 @@ export const AUDIO_COPY_OUTPUT_NAME = "segment-output.m4a";
 export const MUTED_VIDEO_OUTPUT_NAME = "segment-muted-output.mp4";
 export const CROP_OUTPUT_NAME = "segment-crop-output.mp4";
 
+/** No scaling, seeking or frame-rate override: flip the full video and preserve its audio. */
+export function buildVideoMirrorArgs(axis: "horizontal" | "vertical", inputName: string, outputName: string): string[] {
+    return ["-i", inputName, "-map", "0:V:0", "-map", "0:a?", "-vf", axis === "horizontal" ? "hflip" : "vflip", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", outputName];
+}
+
 /** 视频片段裁切参数：输出统一编码 MP4。 */
 export function buildSegmentTrimArgs(startSec: string, durationSec: string): string[] {
     return ["-i", SEGMENT_INPUT_NAME, "-ss", startSec, "-t", durationSec, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", "-movflags", "+faststart", SEGMENT_OUTPUT_NAME];

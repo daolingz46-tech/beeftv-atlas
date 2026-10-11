@@ -164,7 +164,7 @@ export function CanvasNodeContextMenu({
     const isAudio = node?.type === CanvasNodeType.Audio;
     const isFrame = node?.type === CanvasNodeType.Frame;
     const isFolder = isCanvasFolderNode(node);
-    const hasNodeContent = isText ? Boolean(nodeContent.trim()) : Boolean(nodeContent);
+    const hasNodeContent = isText ? Boolean(nodeContent.trim()) : Boolean(nodeContent || node?.metadata?.storageKey);
     const canSaveAsset = Boolean(node && !isCharacterReference && (isText ? hasNodeContent : hasNodeContent && (isImage || isVideo || isAudio)));
     const canOpenPreview = Boolean(isMedia && hasNodeContent);
     const canGenerateFromText = Boolean(isText && !isCharacterReference && hasNodeContent);
@@ -241,6 +241,7 @@ export function CanvasNodeContextMenu({
                                 </>
                             ) : isMedia ? (
                                 <>
+                                    <MenuButton icon={<Clipboard />} label={isImage ? "复制图片" : "复制视频文件"} disabled={!hasNodeContent} onClick={() => runAction(onCopyContent)} />
                                     {isImage ? (
                                         <>
                                             <MenuButton icon={<Maximize2 />} label="全景预览" disabled={!canOpenPreview} onClick={() => runAction(onViewMedia)} />
@@ -275,6 +276,7 @@ export function CanvasNodeContextMenu({
                                     <MenuSection label="副本与内容" />
                                             <MenuButton icon={<Copy />} label={isFrame ? `复制${isFolder ? "文件夹" : "背板"}及内容` : "复制节点"} shortcut="⌘C" onClick={() => runAction(onCopyNode)} />
                                     {isText ? <MenuButton icon={<Clipboard />} label="复制文本" disabled={!hasNodeContent} onClick={() => runAction(onCopyContent)} /> : null}
+                                    {isAudio ? <MenuButton icon={<Clipboard />} label="复制音频文件" disabled={!hasNodeContent} onClick={() => runAction(onCopyContent)} /> : null}
                                     <MenuButton icon={<Copy />} label={isFrame ? `创建${isFolder ? "文件夹" : "背板"}副本` : "创建参数变体"} shortcut="⌘D" onClick={() => runAction(onDuplicate)} />
                                     <MenuButton icon={<Clipboard />} label="粘贴" shortcut="⌘V" disabled={!canPaste} onClick={() => runAction(onPaste)} />
                                     <MenuButton icon={<Trash2 />} label={isFrame ? `删除${isFolder ? "文件夹" : "背板"}` : "删除节点"} danger onClick={() => runAction(onDelete)} />

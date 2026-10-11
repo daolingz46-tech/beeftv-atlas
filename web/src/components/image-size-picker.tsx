@@ -7,14 +7,14 @@ import { buildImageResolutionOptions, type ImageResolutionOption, type ImageReso
 
 import { resolveImageRequestSize, validateImageSize } from "@/services/api/image-validation";
 
-export function ImageSizePicker({ profile, size, quality, onChange }: { profile: ImageCapabilityConfig; size: string; quality?: string; onChange: (size: string, quality?: string) => void }) {
+export function ImageSizePicker({ profile, size, quality, resolution, onChange }: { profile: ImageCapabilityConfig; size: string; quality?: string; resolution?: string; onChange: (size: string, quality?: string, resolution?: string) => void }) {
     const presets = imageSizePresets(profile).filter((preset) => imageTierAvailable(profile, preset.tier));
     const visibleTiers = IMAGE_RESOLUTIONS.filter((value) => presets.some((preset) => preset.tier === value));
     const [chosenTier, setChosenTier] = useState<ImageResolutionTier>("1k");
     const [customPreset, setCustomPreset] = useState<ImageResolutionOption>();
     const [custom, setCustom] = useState("");
     const [error, setError] = useState("");
-    const qualityTier = IMAGE_RESOLUTIONS.find((value) => value === (quality || "").toLowerCase());
+    const qualityTier = IMAGE_RESOLUTIONS.find((value) => value === (profile.resolution?.supported ? resolution || profile.resolution.default : quality || "").toLowerCase());
     const matches = (preset: ImageResolutionOption) => {
         if (imagePresetValue(profile, preset) !== size) return false;
         if (profile.size.parameter !== "aspect_ratio") return true;
@@ -61,7 +61,7 @@ export function ImageSizePicker({ profile, size, quality, onChange }: { profile:
         setChosenTier(preset.tier);
         setCustomPreset(preset);
         setError("");
-        onChange(imagePresetValue(profile, preset), profile.size.parameter === "aspect_ratio" ? imageQualityForSelection(profile, preset.tier) : undefined);
+        onChange(imagePresetValue(profile, preset), profile.size.parameter === "aspect_ratio" ? imageQualityForSelection(profile, preset.tier) : undefined, profile.resolution?.supported ? profile.resolution.values.find((value) => value.toLowerCase() === preset.tier) : undefined);
     };
     const makeCustom = (next: ImageResolutionTier, ratio: string) => {
         const preset = imagePresetForRatio(next, ratio);

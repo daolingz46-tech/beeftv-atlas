@@ -83,6 +83,9 @@ func (a *DesktopApp) start(ctx context.Context) error {
 	desktopRuntimeRegistryMu.Lock()
 	desktopRuntimeRegistry[a] = runtime
 	desktopRuntimeRegistryMu.Unlock()
+	if err := writeMCPRuntime(a.dataDir, DesktopRuntimeConfig{BaseURL: runtime.BaseURL(), LaunchToken: runtime.LaunchToken()}); err != nil {
+		log.Printf("本地 MCP 连接信息不可用: %v", err)
+	}
 	return nil
 }
 
@@ -95,6 +98,7 @@ func (a *DesktopApp) stop(ctx context.Context) error {
 		return nil
 	}
 	err := runtime.Close(ctx)
+	removeMCPRuntime(a.dataDir)
 	desktopRuntimeRegistryMu.Lock()
 	delete(desktopRuntimeRegistry, a)
 	desktopRuntimeRegistryMu.Unlock()

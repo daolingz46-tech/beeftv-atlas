@@ -414,6 +414,7 @@ export function backendProviderConfig(config: AiConfig, mode: BackendGenerationM
     const generationOptions = {
         size: config.size,
         quality: omittedImageQuality(config.quality),
+        imageResolution: config.imageResolution,
         transparentBackground: config.transparentBackground,
         count: config.count,
         videoSeconds: config.videoSeconds,

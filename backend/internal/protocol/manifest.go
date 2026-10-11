@@ -1100,6 +1100,10 @@ func manifestRequestValues(request GenerationRequest) map[string]any {
 	output.GenerateAudio = output.GenerateAudio || request.GenerateAudio
 	output.Watermark = output.Watermark || request.Watermark
 	outputValue, _ := requestAsManifestValue(output)
+	providerOptions := make(map[string]any, len(request.ProviderOptions))
+	for namespace, values := range request.ProviderOptions {
+		providerOptions[namespace] = values
+	}
 
 	return map[string]any{
 		"capability":      request.Capability,
@@ -1120,7 +1124,7 @@ func manifestRequestValues(request GenerationRequest) map[string]any {
 		"watermark":       request.Watermark,
 		"operation":       request.Operation,
 		"output":          outputValue,
-		"providerOptions": request.ProviderOptions,
+		"providerOptions": providerOptions,
 		"extra":           request.Extra,
 	}
 }

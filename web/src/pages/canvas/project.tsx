@@ -17,6 +17,8 @@ import { isCanvasImageSourceNode } from "@/lib/canvas/canvas-image-source";
 import { canOpenCanvasNodePromptPanel, isCanvasMediaResultNode } from "@/lib/canvas/canvas-node-semantics";
 import { getCachedResourceBlob } from "@/services/resource-blob-cache";
 import copyToClipboard from "copy-to-clipboard";
+import { canvasMediaFileExtension } from "@/lib/canvas/canvas-media-download";
+import { copyOwnedMediaToClipboard } from "@/services/desktop-media-save";
 import { nanoid } from "nanoid";
 import { canvasAppearanceBaseTheme, canvasAppearanceForTheme, DEFAULT_CANVAS_BACKGROUND_MODE, normalizeCanvasAppearance, resolveCanvasAppearance, writeCanvasAppearanceDefault, type CanvasAppearance } from "@/lib/canvas/canvas-appearance";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
@@ -51,6 +53,7 @@ import { CanvasVideoInlineTrimOverlay } from "@/components/canvas/canvas-video-i
 import { CanvasTimelineDialog } from "@/components/canvas/canvas-timeline-dialog";
 import { syncNodeSubtitlesToTimeline } from "@/lib/timeline/timeline-build";
 import { CanvasNodeAnglePanel } from "@/components/canvas/canvas-node-angle-dialog";
+import { CanvasImageToolSource } from "@/components/canvas/canvas-image-tool-source";
 import { CanvasNodeLightingPanel } from "@/components/canvas/canvas-node-lighting-dialog";
 import { CanvasTextEditorModal } from "@/components/canvas/canvas-text-editor-modal";
 import { CanvasNodeSearchModal } from "@/components/canvas/canvas-node-search-modal";
@@ -140,6 +143,7 @@ import { useCanvasGenerationRetry } from "./use-canvas-generation-retry";
 import { useCanvasHistory } from "./use-canvas-history";
 import { useCanvasKeyboard } from "./use-canvas-keyboard";
 import { useCanvasMediaTools } from "./use-canvas-media-tools";
+import { useCanvasMediaMirror } from "./use-canvas-media-mirror";
 import { useCanvasNodeEditor } from "./use-canvas-node-editor";
 import { useCanvasNodeOperations } from "./use-canvas-node-operations";
 import { useCanvasProjectLifecycle } from "./use-canvas-project-lifecycle";
@@ -1991,6 +1995,7 @@ function InfiniteCanvasPage() {
         });
     }, []);
     const pendingMediaUpdatesRef = useRef(new Map<string, (node: CanvasNodeData) => CanvasNodeData>());
+    const { mirrorNode, mirroring } = useCanvasMediaMirror({ projectId, domainProjectId: linkedProjectId, nodesRef, updateNode: updateNodeFromContent });
     const mediaUpdateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const updateMediaNodeFromContent = useCallback((nodeId: string, update: (node: CanvasNodeData) => CanvasNodeData) => {
         const previous = pendingMediaUpdatesRef.current.get(nodeId);
@@ -2189,7 +2194,7 @@ function InfiniteCanvasPage() {
             releaseCopiedNodesPastePriority();
             const content = node?.metadata?.content?.trim();
             const resourceId = resourceIdFromStorageKey(node?.metadata?.storageKey);
-            const copySource = content || (node?.type === CanvasNodeType.Image && resourceId ? resourceFileUrl(resourceId) : "");
+            const copySource = content || (resourceId ? resourceFileUrl(resourceId) : "");
             if (!node || !copySource) {
                 copyingNodeContentRef.current = false;
                 message.warning("没有可复制的内容");
@@ -2197,20 +2202,22 @@ function InfiniteCanvasPage() {
             }
 
             try {
+                if (node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) {
+                    const extension = canvasMediaFileExtension(node);
+                    await copyOwnedMediaToClipboard(`${node.title || "生成产物"}.${extension}`, resourceId);
+                    message.success(node.type === CanvasNodeType.Video ? "视频文件已复制，可以直接粘贴" : "音频文件已复制，可以直接粘贴");
+                    return;
+                }
                 if (node.type === CanvasNodeType.Image) {
                     try {
                         await copyImageToSystemClipboard(copySource, node.metadata?.storageKey);
                         message.success("图片已复制到剪贴板");
                         return;
                     } catch (imageErr) {
-                        const fallbackUrl = new URL(copySource, window.location.href).toString();
-                        if (navigator.clipboard?.writeText) {
-                            await navigator.clipboard.writeText(fallbackUrl).catch(() => undefined);
-                            message.info("由于浏览器未获得焦点，已为您复制图片地址");
-                            return;
-                        }
-                        if (await copyToClipboard(fallbackUrl)) {
-                            message.info("由于浏览器未获得焦点，已为您复制图片地址");
+                        const copy = window.go?.main?.DesktopApp?.CopyOwnedMedia;
+                        if (copy && resourceId) {
+                            await copyOwnedMediaToClipboard(`${node.title || "生成图片"}.${canvasMediaFileExtension(node)}`, resourceId);
+                            message.success("图片文件已复制，可以直接粘贴");
                             return;
                         }
                         throw imageErr;
@@ -2521,6 +2528,7 @@ function InfiniteCanvasPage() {
             ) : (
                 <CanvasNodePromptPanel
                     projectId={projectId}
+                    addedSkills={addedSkills}
                     node={panelNode}
                     isRunning={isCanvasNodeGenerating(panelNode, runningNodeId)}
                     mentionReferences={[
@@ -2561,6 +2569,7 @@ function InfiniteCanvasPage() {
         },
         [
             configInputsById,
+            addedSkills,
             handleConfigNodeChange,
             handleGenerateNode,
             handleNodePromptChange,
@@ -3214,25 +3223,25 @@ function InfiniteCanvasPage() {
                                 dragOffset={dragPreview?.nodeIds.has(angleNode.id) ? { x: dragPreview.x, y: dragPreview.y } : null}
                                 isDragging={isNodeDragging && Boolean(dragPreview?.nodeIds.has(angleNode.id))}
                             >
-                                <CanvasNodeAnglePanel
-                                    dataUrl={angleNode.metadata.content}
+                                <CanvasImageToolSource node={angleNode} onClose={() => setAngleNodeId(null)}>{(url) => <CanvasNodeAnglePanel
+                                    dataUrl={url}
                                     onClose={() => setAngleNodeId(null)}
                                     onConfirm={(params) => {
                                         void generateAngleNode(angleNode, params);
                                     }}
-                                />
+                                />}</CanvasImageToolSource>
                             </CanvasNodePanelOverlay>
                         ) : null}
 
                         {lightingNode?.metadata?.content ? (
                             <AppModal flush open centered title={null} closable={false} footer={null} width={720} onCancel={() => setLightingNodeId(null)}>
-                                <CanvasNodeLightingPanel
-                                    dataUrl={lightingNode.metadata.content}
+                                <CanvasImageToolSource node={lightingNode} onClose={() => setLightingNodeId(null)}>{(url) => <CanvasNodeLightingPanel
+                                    dataUrl={url}
                                     onClose={() => setLightingNodeId(null)}
                                     onConfirm={(options, prompt) => {
                                         generateLightingNode(lightingNode, options, prompt);
                                     }}
-                                />
+                                />}</CanvasImageToolSource>
                             </AppModal>
                         ) : null}
 
@@ -3348,6 +3357,8 @@ function InfiniteCanvasPage() {
                             }}
                             onPortraitTexture={openPortraitTextureEditor}
                             onCrop={(node) => node.type === CanvasNodeType.Video ? openVideoCrop(node) : setCropNodeId(node.id)}
+                            onMirror={mirrorNode}
+                            mirroring={mirroring}
                             onSplit={(node, params) => void splitImageNode(node, params)}
                             onUpscale={(node) => setUpscaleNodeId(node.id)}
                             onSuperResolve={(node) => setSuperResolveNodeId(node.id)}

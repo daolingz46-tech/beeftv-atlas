@@ -1,0 +1,1066 @@
+{
+  "minimax/music-3.0": {
+    "voices": [],
+    "defaultVoice": "",
+    "speedMin": 1,
+    "speedMax": 1,
+    "showSpeed": false,
+    "formats": [
+      {
+        "value": "mp3",
+        "label": "MP3"
+      },
+      {
+        "value": "wav",
+        "label": "WAV"
+      },
+      {
+        "value": "pcm",
+        "label": "PCM"
+      }
+    ],
+    "defaultFormat": "mp3",
+    "showFormat": true
+  },
+  "minimax/lyrics-generation": {
+    "voices": [],
+    "defaultVoice": "",
+    "speedMin": 1,
+    "speedMax": 1,
+    "showSpeed": false,
+    "formats": [],
+    "defaultFormat": "mp3",
+    "showFormat": false
+  },
+  "bytedance/seed-audio-1.0": {
+    "voices": [],
+    "defaultVoice": "",
+    "speedMin": 1,
+    "speedMax": 1,
+    "showSpeed": false,
+    "formats": [
+      {
+        "value": "mp3",
+        "label": "MP3"
+      },
+      {
+        "value": "wav",
+        "label": "WAV"
+      },
+      {
+        "value": "pcm",
+        "label": "PCM"
+      },
+      {
+        "value": "ogg_opus",
+        "label": "OGG_OPUS"
+      }
+    ],
+    "defaultFormat": "mp3",
+    "showFormat": true
+  },
+  "minimax/speech-2.6-turbo": {
+    "voices": [
+      {
+        "value": "English_expressive_narrator",
+        "label": "Expressive Narrator"
+      },
+      {
+        "value": "English_radiant_girl",
+        "label": "Radiant Girl"
+      },
+      {
+        "value": "English_magnetic_voiced_man",
+        "label": "Magnetic-voiced Male"
+      },
+      {
+        "value": "English_compelling_lady1",
+        "label": "Compelling Lady"
+      },
+      {
+        "value": "English_Aussie_Bloke",
+        "label": "Aussie Bloke"
+      },
+      {
+        "value": "English_captivating_female1",
+        "label": "Captivating Female"
+      },
+      {
+        "value": "English_Upbeat_Woman",
+        "label": "Upbeat Woman"
+      },
+      {
+        "value": "English_Trustworth_Man",
+        "label": "Trustworthy Man"
+      },
+      {
+        "value": "English_CalmWoman",
+        "label": "Calm Woman"
+      },
+      {
+        "value": "English_UpsetGirl",
+        "label": "Upset Girl"
+      },
+      {
+        "value": "English_Gentle-voiced_man",
+        "label": "Gentle-voiced Man"
+      },
+      {
+        "value": "English_Whispering_girl",
+        "label": "Whispering Girl"
+      },
+      {
+        "value": "English_Diligent_Man",
+        "label": "Diligent Man"
+      },
+      {
+        "value": "English_Graceful_Lady",
+        "label": "Graceful Lady"
+      },
+      {
+        "value": "English_ReservedYoungMan",
+        "label": "Reserved Young Man"
+      }
+    ],
+    "defaultVoice": "English_expressive_narrator",
+    "speedMin": 0.5,
+    "speedMax": 2,
+    "showSpeed": true,
+    "formats": [
+      {
+        "value": "mp3",
+        "label": "MP3"
+      },
+      {
+        "value": "wav",
+        "label": "WAV"
+      },
+      {
+        "value": "flac",
+        "label": "FLAC"
+      }
+    ],
+    "defaultFormat": "mp3",
+    "showFormat": true
+  },
+  "minimax/speech-2.6-hd": {
+    "voices": [
+      {
+        "value": "English_expressive_narrator",
+        "label": "Expressive Narrator"
+      },
+      {
+        "value": "English_radiant_girl",
+        "label": "Radiant Girl"
+      },
+      {
+        "value": "English_magnetic_voiced_man",
+        "label": "Magnetic-voiced Male"
+      },
+      {
+        "value": "English_compelling_lady1",
+        "label": "Compelling Lady"
+      },
+      {
+        "value": "English_Aussie_Bloke",
+        "label": "Aussie Bloke"
+      },
+      {
+        "value": "English_captivating_female1",
+        "label": "Captivating Female"
+      },
+      {
+        "value": "English_Upbeat_Woman",
+        "label": "Upbeat Woman"
+      },
+      {
+        "value": "English_Trustworth_Man",
+        "label": "Trustworthy Man"
+      },
+      {
+        "value": "English_CalmWoman",
+        "label": "Calm Woman"
+      },
+      {
+        "value": "English_UpsetGirl",
+        "label": "Upset Girl"
+      },
+      {
+        "value": "English_Gentle-voiced_man",
+        "label": "Gentle-voiced Man"
+      },
+      {
+        "value": "English_Whispering_girl",
+        "label": "Whispering Girl"
+      },
+      {
+        "value": "English_Diligent_Man",
+        "label": "Diligent Man"
+      },
+      {
+        "value": "English_Graceful_Lady",
+        "label": "Graceful Lady"
+      },
+      {
+        "value": "English_ReservedYoungMan",
+        "label": "Reserved Young Man"
+      }
+    ],
+    "defaultVoice": "English_expressive_narrator",
+    "speedMin": 0.5,
+    "speedMax": 2,
+    "showSpeed": true,
+    "formats": [
+      {
+        "value": "mp3",
+        "label": "MP3"
+      },
+      {
+        "value": "wav",
+        "label": "WAV"
+      },
+      {
+        "value": "flac",
+        "label": "FLAC"
+      }
+    ],
+    "defaultFormat": "mp3",
+    "showFormat": true
+  },
+  "xai/tts-v1": {
+    "voices": [
+      {
+        "value": "ara",
+        "label": "Ara"
+      },
+      {
+        "value": "eve",
+        "label": "Eve"
+      },
+      {
+        "value": "leo",
+        "label": "Leo"
+      },
+      {
+        "value": "rex",
+        "label": "Rex"
+      },
+      {
+        "value": "sal",
+        "label": "Sal"
+      },
+      {
+        "value": "jpi39icg",
+        "label": "Jian"
+      },
+      {
+        "value": "d18jlf6v",
+        "label": "Hao"
+      },
+      {
+        "value": "33g9t0jl",
+        "label": "Xia"
+      },
+      {
+        "value": "26w6ihxi",
+        "label": "Pavel"
+      },
+      {
+        "value": "dr8gqysu",
+        "label": "Andrei"
+      },
+      {
+        "value": "wy0m9l5w",
+        "label": "Dmitri"
+      },
+      {
+        "value": "om17cury",
+        "label": "Irina"
+      },
+      {
+        "value": "x7avnu1k",
+        "label": "Enzo"
+      },
+      {
+        "value": "bcs7l2c3",
+        "label": "Matteo"
+      },
+      {
+        "value": "hqxr4yub",
+        "label": "Luca"
+      },
+      {
+        "value": "h27ltdnz",
+        "label": "Alessandro"
+      },
+      {
+        "value": "89q2pnko",
+        "label": "Karan"
+      },
+      {
+        "value": "73xd5dum",
+        "label": "Ananya"
+      },
+      {
+        "value": "0p0rt7o1",
+        "label": "Remi"
+      },
+      {
+        "value": "hbxkrnwm",
+        "label": "Hugo"
+      },
+      {
+        "value": "69smp8rm",
+        "label": "Camille"
+      },
+      {
+        "value": "yis75yfp",
+        "label": "Manuel"
+      },
+      {
+        "value": "ekhwx401",
+        "label": "Javier"
+      },
+      {
+        "value": "jupvcf34",
+        "label": "Diego"
+      },
+      {
+        "value": "0hhfxxqq",
+        "label": "Andres"
+      },
+      {
+        "value": "0ih5oi34",
+        "label": "Kasper"
+      },
+      {
+        "value": "gwnexu6y",
+        "label": "Lars"
+      },
+      {
+        "value": "97zmdc6s",
+        "label": "Ida"
+      },
+      {
+        "value": "fc7de6afcf6c",
+        "label": "Duc"
+      },
+      {
+        "value": "7a9ee820b342",
+        "label": "Minh"
+      },
+      {
+        "value": "0895a5b8ce5c",
+        "label": "Mai"
+      },
+      {
+        "value": "f8cf5c2c78d4",
+        "label": "Grace"
+      },
+      {
+        "value": "96819d0bd28d",
+        "label": "Daniel"
+      },
+      {
+        "value": "79f3a8b96d43",
+        "label": "Claire"
+      },
+      {
+        "value": "78a495fdbb39",
+        "label": "James"
+      },
+      {
+        "value": "e22152e06fd8",
+        "label": "Axel"
+      },
+      {
+        "value": "490ea3be50b1",
+        "label": "Saga"
+      },
+      {
+        "value": "1f046a033914",
+        "label": "Erik"
+      },
+      {
+        "value": "dfe7b9e7d217",
+        "label": "Valtteri"
+      },
+      {
+        "value": "c3a2c594479e",
+        "label": "Helmi"
+      },
+      {
+        "value": "83c6f4fea98e",
+        "label": "Eero"
+      },
+      {
+        "value": "34fd4dce1ba3",
+        "label": "Elina"
+      },
+      {
+        "value": "d634b6da3d3b",
+        "label": "Aylin"
+      },
+      {
+        "value": "670a0c3ac005",
+        "label": "Emre"
+      },
+      {
+        "value": "182a91893636",
+        "label": "Kaan"
+      },
+      {
+        "value": "d0cb9ff07d95",
+        "label": "Sakura"
+      },
+      {
+        "value": "b1a7441b97a1",
+        "label": "Ren"
+      },
+      {
+        "value": "bf9fe5b5f981",
+        "label": "Jun-seo"
+      },
+      {
+        "value": "b5ae17439907",
+        "label": "Min-jun"
+      },
+      {
+        "value": "a0401c9101f8",
+        "label": "Seo-yeon"
+      },
+      {
+        "value": "23be42535a45",
+        "label": "Ji-yeon"
+      },
+      {
+        "value": "abfbdf26f115",
+        "label": "Mateus"
+      },
+      {
+        "value": "6da5baee46d0",
+        "label": "Beatriz"
+      },
+      {
+        "value": "3d030bc92a87",
+        "label": "Rafael"
+      },
+      {
+        "value": "a13662ba951c",
+        "label": "Thijs"
+      },
+      {
+        "value": "58d27475085e",
+        "label": "Femke"
+      },
+      {
+        "value": "247783ebdd51",
+        "label": "Noor"
+      },
+      {
+        "value": "244e27b39200",
+        "label": "Ruben"
+      },
+      {
+        "value": "97fabd54445f",
+        "label": "Katarzyna"
+      },
+      {
+        "value": "37329fd8895a",
+        "label": "Mateusz"
+      },
+      {
+        "value": "2badb5f46b1e",
+        "label": "Jakub"
+      },
+      {
+        "value": "1b12d5daee6b",
+        "label": "Aleksandra"
+      },
+      {
+        "value": "908c4626660f",
+        "label": "Krit"
+      },
+      {
+        "value": "4ff93971bfdc",
+        "label": "Aroon"
+      },
+      {
+        "value": "70013edeb8e8",
+        "label": "Khalid"
+      },
+      {
+        "value": "35c8d7f60dc8",
+        "label": "Layla"
+      },
+      {
+        "value": "23468361b4ef",
+        "label": "Tariq"
+      },
+      {
+        "value": "458705c07139",
+        "label": "Clara"
+      },
+      {
+        "value": "41321eb41295",
+        "label": "Moritz"
+      },
+      {
+        "value": "40f31906b23d",
+        "label": "Niklas"
+      },
+      {
+        "value": "3a7889066fa2",
+        "label": "Lena"
+      }
+    ],
+    "defaultVoice": "eve",
+    "speedMin": 0.7,
+    "speedMax": 1.5,
+    "showSpeed": true,
+    "formats": [],
+    "defaultFormat": "mp3",
+    "showFormat": false
+  },
+  "minimax/music-2.6": {
+    "voices": [],
+    "defaultVoice": "",
+    "speedMin": 1,
+    "speedMax": 1,
+    "showSpeed": false,
+    "formats": [
+      {
+        "value": "mp3",
+        "label": "MP3"
+      },
+      {
+        "value": "wav",
+        "label": "WAV"
+      },
+      {
+        "value": "pcm",
+        "label": "PCM"
+      }
+    ],
+    "defaultFormat": "mp3",
+    "showFormat": true
+  },
+  "elevenlabs/v3/text-to-speech": {
+    "voices": [
+      {
+        "value": "hpp4J3VqNfWAUOO0d1Us",
+        "label": "Bella"
+      },
+      {
+        "value": "CwhRBWXzGAHq8TQ4Fs17",
+        "label": "Roger"
+      },
+      {
+        "value": "EXAVITQu4vr4xnSDxMaL",
+        "label": "Sarah"
+      },
+      {
+        "value": "FGY2WhTYpPnrIDTdsKH5",
+        "label": "Laura"
+      },
+      {
+        "value": "IKne3meq5aSn9XLyUdCD",
+        "label": "Charlie"
+      },
+      {
+        "value": "JBFqnCBsd6RMkjVDRZzb",
+        "label": "George"
+      },
+      {
+        "value": "N2lVS1w4EtoT3dr4eOWO",
+        "label": "Callum"
+      },
+      {
+        "value": "SAz9YHcvj6GT2YYXdXww",
+        "label": "River"
+      },
+      {
+        "value": "SOYHLrjzK2X1ezoPC6cr",
+        "label": "Harry"
+      },
+      {
+        "value": "TX3LPaxmHKxFdv7VOQHJ",
+        "label": "Liam"
+      },
+      {
+        "value": "Xb7hH8MSUJpSbSDYk0k2",
+        "label": "Alice"
+      },
+      {
+        "value": "XrExE9yKIg1WjnnlVkGX",
+        "label": "Matilda"
+      },
+      {
+        "value": "bIHbv24MWmeRgasZH58o",
+        "label": "Will"
+      },
+      {
+        "value": "cgSgspJ2msm6clMCkdW9",
+        "label": "Jessica"
+      },
+      {
+        "value": "cjVigY5qzO86Huf0OWal",
+        "label": "Eric"
+      },
+      {
+        "value": "iP95p4xoKVk53GoZ742B",
+        "label": "Chris"
+      },
+      {
+        "value": "nPczCjzI2devNBz1zQrb",
+        "label": "Brian"
+      },
+      {
+        "value": "onwK4e9ZLuTAKqWW03F9",
+        "label": "Daniel"
+      },
+      {
+        "value": "pFZP5JQG7iQjIQuC4Bku",
+        "label": "Lily"
+      },
+      {
+        "value": "pNInz6obpgDQGcFmaJgB",
+        "label": "Adam"
+      },
+      {
+        "value": "pqHfZKP75CvOlQylNhV4",
+        "label": "Bill"
+      }
+    ],
+    "defaultVoice": "hpp4J3VqNfWAUOO0d1Us",
+    "speedMin": 1,
+    "speedMax": 1,
+    "showSpeed": false,
+    "formats": [],
+    "defaultFormat": "mp3",
+    "showFormat": false
+  },
+  "suno/chirp-v6": {
+    "voices": [],
+    "defaultVoice": "",
+    "speedMin": 1,
+    "speedMax": 1,
+    "showSpeed": false,
+    "formats": [],
+    "defaultFormat": "mp3",
+    "showFormat": false
+  },
+  "suno/chirp-v6-wild": {
+    "voices": [],
+    "defaultVoice": "",
+    "speedMin": 1,
+    "speedMax": 1,
+    "showSpeed": false,
+    "formats": [],
+    "defaultFormat": "mp3",
+    "showFormat": false
+  },
+  "suno/chirp-v6-mini": {
+    "voices": [],
+    "defaultVoice": "",
+    "speedMin": 1,
+    "speedMax": 1,
+    "showSpeed": false,
+    "formats": [],
+    "defaultFormat": "mp3",
+    "showFormat": false
+  },
+  "google/gemini-3.1-flash-tts": {
+    "voices": [
+      {
+        "value": "Zephyr",
+        "label": "Zephyr (Bright)"
+      },
+      {
+        "value": "Puck",
+        "label": "Puck (Upbeat)"
+      },
+      {
+        "value": "Charon",
+        "label": "Charon (Informative)"
+      },
+      {
+        "value": "Kore",
+        "label": "Kore (Firm)"
+      },
+      {
+        "value": "Fenrir",
+        "label": "Fenrir (Excitable)"
+      },
+      {
+        "value": "Leda",
+        "label": "Leda (Youthful)"
+      },
+      {
+        "value": "Orus",
+        "label": "Orus (Firm)"
+      },
+      {
+        "value": "Aoede",
+        "label": "Aoede (Breezy)"
+      },
+      {
+        "value": "Callirrhoe",
+        "label": "Callirrhoe (Easy-going)"
+      },
+      {
+        "value": "Autonoe",
+        "label": "Autonoe (Bright)"
+      },
+      {
+        "value": "Enceladus",
+        "label": "Enceladus (Breathy)"
+      },
+      {
+        "value": "Iapetus",
+        "label": "Iapetus (Clear)"
+      },
+      {
+        "value": "Umbriel",
+        "label": "Umbriel (Easy-going)"
+      },
+      {
+        "value": "Algieba",
+        "label": "Algieba (Smooth)"
+      },
+      {
+        "value": "Despina",
+        "label": "Despina (Smooth)"
+      },
+      {
+        "value": "Erinome",
+        "label": "Erinome (Clear)"
+      },
+      {
+        "value": "Algenib",
+        "label": "Algenib (Gravelly)"
+      },
+      {
+        "value": "Rasalgethi",
+        "label": "Rasalgethi (Informative)"
+      },
+      {
+        "value": "Laomedeia",
+        "label": "Laomedeia (Upbeat)"
+      },
+      {
+        "value": "Achernar",
+        "label": "Achernar (Soft)"
+      },
+      {
+        "value": "Alnilam",
+        "label": "Alnilam (Firm)"
+      },
+      {
+        "value": "Schedar",
+        "label": "Schedar (Even)"
+      },
+      {
+        "value": "Gacrux",
+        "label": "Gacrux (Mature)"
+      },
+      {
+        "value": "Pulcherrima",
+        "label": "Pulcherrima (Forward)"
+      },
+      {
+        "value": "Achird",
+        "label": "Achird (Friendly)"
+      },
+      {
+        "value": "Zubenelgenubi",
+        "label": "Zubenelgenubi (Casual)"
+      },
+      {
+        "value": "Vindemiatrix",
+        "label": "Vindemiatrix (Gentle)"
+      },
+      {
+        "value": "Sadachbia",
+        "label": "Sadachbia (Lively)"
+      },
+      {
+        "value": "Sadaltager",
+        "label": "Sadaltager (Knowledgeable)"
+      },
+      {
+        "value": "Sulafat",
+        "label": "Sulafat (Warm)"
+      }
+    ],
+    "defaultVoice": "Kore",
+    "speedMin": 1,
+    "speedMax": 1,
+    "showSpeed": false,
+    "formats": [],
+    "defaultFormat": "mp3",
+    "showFormat": false
+  },
+  "google/gemini-2.5-flash-tts": {
+    "voices": [
+      {
+        "value": "Zephyr",
+        "label": "Zephyr (Bright)"
+      },
+      {
+        "value": "Puck",
+        "label": "Puck (Upbeat)"
+      },
+      {
+        "value": "Charon",
+        "label": "Charon (Informative)"
+      },
+      {
+        "value": "Kore",
+        "label": "Kore (Firm)"
+      },
+      {
+        "value": "Fenrir",
+        "label": "Fenrir (Excitable)"
+      },
+      {
+        "value": "Leda",
+        "label": "Leda (Youthful)"
+      },
+      {
+        "value": "Orus",
+        "label": "Orus (Firm)"
+      },
+      {
+        "value": "Aoede",
+        "label": "Aoede (Breezy)"
+      },
+      {
+        "value": "Callirrhoe",
+        "label": "Callirrhoe (Easy-going)"
+      },
+      {
+        "value": "Autonoe",
+        "label": "Autonoe (Bright)"
+      },
+      {
+        "value": "Enceladus",
+        "label": "Enceladus (Breathy)"
+      },
+      {
+        "value": "Iapetus",
+        "label": "Iapetus (Clear)"
+      },
+      {
+        "value": "Umbriel",
+        "label": "Umbriel (Easy-going)"
+      },
+      {
+        "value": "Algieba",
+        "label": "Algieba (Smooth)"
+      },
+      {
+        "value": "Despina",
+        "label": "Despina (Smooth)"
+      },
+      {
+        "value": "Erinome",
+        "label": "Erinome (Clear)"
+      },
+      {
+        "value": "Algenib",
+        "label": "Algenib (Gravelly)"
+      },
+      {
+        "value": "Rasalgethi",
+        "label": "Rasalgethi (Informative)"
+      },
+      {
+        "value": "Laomedeia",
+        "label": "Laomedeia (Upbeat)"
+      },
+      {
+        "value": "Achernar",
+        "label": "Achernar (Soft)"
+      },
+      {
+        "value": "Alnilam",
+        "label": "Alnilam (Firm)"
+      },
+      {
+        "value": "Schedar",
+        "label": "Schedar (Even)"
+      },
+      {
+        "value": "Gacrux",
+        "label": "Gacrux (Mature)"
+      },
+      {
+        "value": "Pulcherrima",
+        "label": "Pulcherrima (Forward)"
+      },
+      {
+        "value": "Achird",
+        "label": "Achird (Friendly)"
+      },
+      {
+        "value": "Zubenelgenubi",
+        "label": "Zubenelgenubi (Casual)"
+      },
+      {
+        "value": "Vindemiatrix",
+        "label": "Vindemiatrix (Gentle)"
+      },
+      {
+        "value": "Sadachbia",
+        "label": "Sadachbia (Lively)"
+      },
+      {
+        "value": "Sadaltager",
+        "label": "Sadaltager (Knowledgeable)"
+      },
+      {
+        "value": "Sulafat",
+        "label": "Sulafat (Warm)"
+      }
+    ],
+    "defaultVoice": "Kore",
+    "speedMin": 1,
+    "speedMax": 1,
+    "showSpeed": false,
+    "formats": [],
+    "defaultFormat": "mp3",
+    "showFormat": false
+  },
+  "google/gemini-2.5-pro-tts": {
+    "voices": [
+      {
+        "value": "Zephyr",
+        "label": "Zephyr (Bright)"
+      },
+      {
+        "value": "Puck",
+        "label": "Puck (Upbeat)"
+      },
+      {
+        "value": "Charon",
+        "label": "Charon (Informative)"
+      },
+      {
+        "value": "Kore",
+        "label": "Kore (Firm)"
+      },
+      {
+        "value": "Fenrir",
+        "label": "Fenrir (Excitable)"
+      },
+      {
+        "value": "Leda",
+        "label": "Leda (Youthful)"
+      },
+      {
+        "value": "Orus",
+        "label": "Orus (Firm)"
+      },
+      {
+        "value": "Aoede",
+        "label": "Aoede (Breezy)"
+      },
+      {
+        "value": "Callirrhoe",
+        "label": "Callirrhoe (Easy-going)"
+      },
+      {
+        "value": "Autonoe",
+        "label": "Autonoe (Bright)"
+      },
+      {
+        "value": "Enceladus",
+        "label": "Enceladus (Breathy)"
+      },
+      {
+        "value": "Iapetus",
+        "label": "Iapetus (Clear)"
+      },
+      {
+        "value": "Umbriel",
+        "label": "Umbriel (Easy-going)"
+      },
+      {
+        "value": "Algieba",
+        "label": "Algieba (Smooth)"
+      },
+      {
+        "value": "Despina",
+        "label": "Despina (Smooth)"
+      },
+      {
+        "value": "Erinome",
+        "label": "Erinome (Clear)"
+      },
+      {
+        "value": "Algenib",
+        "label": "Algenib (Gravelly)"
+      },
+      {
+        "value": "Rasalgethi",
+        "label": "Rasalgethi (Informative)"
+      },
+      {
+        "value": "Laomedeia",
+        "label": "Laomedeia (Upbeat)"
+      },
+      {
+        "value": "Achernar",
+        "label": "Achernar (Soft)"
+      },
+      {
+        "value": "Alnilam",
+        "label": "Alnilam (Firm)"
+      },
+      {
+        "value": "Schedar",
+        "label": "Schedar (Even)"
+      },
+      {
+        "value": "Gacrux",
+        "label": "Gacrux (Mature)"
+      },
+      {
+        "value": "Pulcherrima",
+        "label": "Pulcherrima (Forward)"
+      },
+      {
+        "value": "Achird",
+        "label": "Achird (Friendly)"
+      },
+      {
+        "value": "Zubenelgenubi",
+        "label": "Zubenelgenubi (Casual)"
+      },
+      {
+        "value": "Vindemiatrix",
+        "label": "Vindemiatrix (Gentle)"
+      },
+      {
+        "value": "Sadachbia",
+        "label": "Sadachbia (Lively)"
+      },
+      {
+        "value": "Sadaltager",
+        "label": "Sadaltager (Knowledgeable)"
+      },
+      {
+        "value": "Sulafat",
+        "label": "Sulafat (Warm)"
+      }
+    ],
+    "defaultVoice": "Kore",
+    "speedMin": 1,
+    "speedMax": 1,
+    "showSpeed": false,
+    "formats": [],
+    "defaultFormat": "mp3",
+    "showFormat": false
+  }
+}

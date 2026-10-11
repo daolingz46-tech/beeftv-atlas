@@ -32,8 +32,11 @@ Wails / local dev
 | HTTP | `backend/internal/handler` | 本地 `/api` 合同、输入限制和响应封装 |
 | 企业连接 | `backend/internal/beefapi` | 设备授权、本机密钥和连接状态 |
 | 本机 MCP | `backend/internal/mcp` | 进程内 initialize / tools/list / tools/call |
+| 外部 Agent MCP | `tools/beeftv-mcp`、`backend/cmd/desktop/mcp_discovery*` | stdio 工具、私有桌面会话发现、费用查询与异步生成任务桥接 |
 | 桌面更新发布 | `backend/cmd/update-release` | 生成更新密钥、打包 zip、签署 `desktop-update.json` |
 | 前端 | `web/src` | React 画布、项目、素材、模型配置与插件 UI |
+| 图片工具预览 | `web/src/components/canvas/canvas-image-tool-source.tsx` | 多角度与打光共用的认证素材读取、图片解码、失败重试和过期结果隔离 |
+| 节点媒体镜像 | `web/src/pages/canvas/use-canvas-media-mirror.ts`、`web/src/lib/canvas/canvas-media-mirror.ts` | 本地翻转图片/视频、复用资源与素材入库、原节点替换及并发保护 |
 
 ## 硬边界
 

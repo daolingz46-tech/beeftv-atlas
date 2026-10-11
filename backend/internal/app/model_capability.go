@@ -62,6 +62,7 @@ type ImageCapabilityConfig struct {
 	References            ImageReferenceConfig `json:"references"`
 	Size                  ImageSizeConfig      `json:"size"`
 	Quality               ImageQualityConfig   `json:"quality"`
+	Resolution            *ImageQualityConfig  `json:"resolution,omitempty"`
 	TransparentBackground VideoBooleanConfig   `json:"transparentBackground"`
 	ResponseFormat        ParameterSupport     `json:"responseFormat"`
 	OutputFormat          ParameterSupport     `json:"outputFormat"`
@@ -69,6 +70,7 @@ type ImageCapabilityConfig struct {
 }
 
 type ImageReferenceConfig struct {
+	MinImages      int   `json:"minImages,omitempty"`
 	PromptMaxChars int   `json:"promptMaxChars"`
 	MaxImages      int   `json:"maxImages"`
 	MaxImageBytes  int64 `json:"maxImageBytes"`
@@ -633,6 +635,14 @@ func validateTextCapabilityConfig(value *TextCapabilityConfig) error {
 }
 
 func validateImageCapabilityConfig(value *ImageCapabilityConfig) error {
+	if value.References.MinImages < 0 || value.References.MinImages > value.References.MaxImages {
+		return BadAuthRequest("图片模型最少参考图数量必须在支持范围内")
+	}
+	if resolution := value.Resolution; resolution != nil && resolution.Supported {
+		if len(resolution.Values) == 0 || !containsCapabilityString(resolution.Values, resolution.Default) {
+			return BadAuthRequest("默认图片分辨率必须属于支持值")
+		}
+	}
 	if value.References.PromptMaxChars < 1 || value.References.PromptMaxChars > 1000000 {
 		return BadAuthRequest("提示词最大字符数必须在 1-1000000 之间")
 	}
@@ -953,6 +963,9 @@ func validateImageTask(profile *ImageCapabilityConfig, input canvasGenerationInp
 	if len(input.ReferenceImages) > profile.References.MaxImages {
 		return BadAuthRequest(fmt.Sprintf("当前图片模型最多支持 %d 张参考图", profile.References.MaxImages))
 	}
+	if len(input.ReferenceImages) < profile.References.MinImages {
+		return BadAuthRequest(fmt.Sprintf("当前图片模型至少需要 %d 张参考图", profile.References.MinImages))
+	}
 	for _, media := range input.ReferenceImages {
 		if profile.References.MaxImageBytes > 0 && media.Bytes > profile.References.MaxImageBytes {
 			return BadAuthRequest("参考图片文件超过当前模型大小限制")
@@ -970,6 +983,9 @@ func validateImageTask(profile *ImageCapabilityConfig, input canvasGenerationInp
 		}
 	}
 	quality := strings.TrimSpace(input.Config.Quality)
+	if resolution := profile.Resolution; resolution != nil && resolution.Supported && input.Config.ImageResolution != "" && !containsCapabilityString(resolution.Values, input.Config.ImageResolution) {
+		return BadAuthRequest("图片分辨率不在当前模型支持范围内")
+	}
 	if profile.Quality.Supported && quality != "" && !strings.EqualFold(quality, "auto") && !strings.EqualFold(quality, "any") && !containsCapabilityString(profile.Quality.Values, quality) {
 		return BadAuthRequest("图片质量不在当前模型支持范围内")
 	}
@@ -991,6 +1007,10 @@ func qualityForImageValidation(quality string, fallback string) string {
 }
 
 func validateImagePresetSelection(profile *ImageCapabilityConfig, quality, ratio string) error {
+	if profile.Resolution != nil {
+		// Separate resolution profiles do not encode resolution in rendering quality.
+		return nil
+	}
 	if profile.Size.Parameter != "aspect_ratio" || profile.Size.AllowCustom || len(profile.Size.Presets) == 0 || ratio == "auto" {
 		return nil
 	}

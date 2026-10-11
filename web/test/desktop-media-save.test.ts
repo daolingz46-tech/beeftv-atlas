@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import { ownedResourceIdFromMediaRef } from "@/services/api/resources";
 import { configureApiRuntime } from "@/services/api/request";
-import { downloadOwnedOrBrowserMedia, isWailsNativeShell, saveOwnedOrBrowserBlob } from "@/services/desktop-media-save";
+import { copyOwnedMediaToClipboard, downloadOwnedOrBrowserMedia, isWailsNativeShell, saveOwnedOrBrowserBlob } from "@/services/desktop-media-save";
 import { sanitizeDownloadFileName } from "@/lib/canvas/canvas-media-download";
 
 const originalWindow = globalThis.window;
@@ -18,6 +18,13 @@ afterEach(() => {
 });
 
 describe("native media save", () => {
+    test("copies owned media through the native clipboard binding with a safe file name", async () => {
+        const calls: Array<[string, string]> = [];
+        Object.assign(globalThis, { window: { go: { main: { DesktopApp: { CopyOwnedMedia: async (name: string, id: string) => { calls.push([name, id]); } } } } } });
+        await copyOwnedMediaToClipboard("../clip:name.MP4", " owned-video ");
+        expect(calls).toEqual([["clip_name.mp4", "owned-video"]]);
+        await expect(copyOwnedMediaToClipboard("clip.mp4", "")).rejects.toThrow("无法直接复制");
+    });
     test("extracts owned resource IDs and rejects arbitrary remote URLs", () => {
         configureApiRuntime("http://127.0.0.1:43123/api", "token");
         expect(ownedResourceIdFromMediaRef("resource:abc123")).toBe("abc123");

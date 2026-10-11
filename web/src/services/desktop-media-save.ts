@@ -6,6 +6,12 @@ export type OwnedMediaSaveResult = "saved" | "cancelled";
 
 export const MAX_OWNED_ARTIFACT_BYTES = 32 * 1024 * 1024;
 
+export async function copyOwnedMediaToClipboard(fileName: string, resourceId?: string): Promise<void> {
+    const copy = typeof window !== "undefined" ? window.go?.main?.DesktopApp?.CopyOwnedMedia : undefined;
+    if (!copy || !resourceId?.trim()) throw new Error("当前内容无法直接复制文件，请先下载到本地");
+    await copy(sanitizeDownloadFileName(fileName), resourceId.trim());
+}
+
 export function isWailsNativeShell() {
     if (typeof window === "undefined") return false;
     return window.location?.protocol === "wails:" || typeof window.go?.main?.DesktopApp?.SaveOwnedMedia === "function" || typeof window.go?.main?.DesktopApp?.SaveOwnedArtifact === "function";

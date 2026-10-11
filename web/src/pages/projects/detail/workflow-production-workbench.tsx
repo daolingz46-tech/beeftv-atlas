@@ -119,6 +119,7 @@ export default function WorkflowProductionWorkbench(props: Props) {
     const [aspectRatio, setAspectRatio] = useState(detail.project.aspectRatio || "16:9");
     const [resolution, setResolution] = useState(effectiveConfig.vquality || "720");
     const [imageQuality, setImageQuality] = useState(effectiveConfig.quality || "auto");
+    const [imageResolution, setImageResolution] = useState(effectiveConfig.imageResolution || "");
     const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
     const { skills: availableSkills, loading: skillsLoading } = useSkillRuntimeCatalog();
     const shotAssetReferenceContext = useMemo(() => buildShotAssetReferenceContext(detail, selectedShot?.id || ""), [detail, selectedShot?.id]);
@@ -160,10 +161,11 @@ export default function WorkflowProductionWorkbench(props: Props) {
         videoModel: generationCapability === "video" ? routedModel : effectiveConfig.videoModel,
         size: aspectRatio,
         quality: imageQuality,
+        imageResolution,
         vquality: resolution,
         videoSeconds: generationSeconds,
         ...(videoBooleanOptions || {}),
-    }), [aspectRatio, effectiveConfig, generationCapability, generationSeconds, imageQuality, resolution, routedModel, videoBooleanOptions]);
+    }), [aspectRatio, effectiveConfig, generationCapability, generationSeconds, imageQuality, imageResolution, resolution, routedModel, videoBooleanOptions]);
     const modelSummary = routedModel ? modelDisplayName(effectiveConfig, routedModel) : "未选择模型";
     const durationSummary = Number(watchedDuration) === -1 ? "自动" : `${Number(watchedDuration || Math.max(0.5, (selectedShot?.durationMs || 3000) / 1000))}s`;
     const resolutionSummary = generationCapability === "video" ? formatVideoResolutionLabel(resolution) : imageQuality.toUpperCase();
@@ -183,9 +185,10 @@ export default function WorkflowProductionWorkbench(props: Props) {
             setResolution(normalized.resolution);
             form.setFieldValue("durationSeconds", Number(normalized.seconds));
         } else if (generationCapability === "image" && profile.image) {
-            const normalized = normalizeImageValue(profile.image, { size: detail.project.aspectRatio || effectiveConfig.size, quality: effectiveConfig.quality, count: "1" });
+            const normalized = normalizeImageValue(profile.image, { size: detail.project.aspectRatio || effectiveConfig.size, quality: effectiveConfig.quality, imageResolution: effectiveConfig.imageResolution, count: "1" });
             setAspectRatio(normalized.size);
             setImageQuality(normalized.quality);
+            setImageResolution(normalized.imageResolution || "");
         }
     }, [detail.project.aspectRatio, effectiveConfig, form, generationCapability, initialModel]);
 
@@ -231,9 +234,10 @@ export default function WorkflowProductionWorkbench(props: Props) {
             return;
         }
         if (generationCapability === "image" && profile.image) {
-            const normalized = normalizeImageValue(profile.image, { size: aspectRatio, quality: imageQuality, count: "1" });
+            const normalized = normalizeImageValue(profile.image, { size: aspectRatio, quality: imageQuality, imageResolution, count: "1" });
             setAspectRatio(normalized.size);
             setImageQuality(normalized.quality);
+            setImageResolution(normalized.imageResolution || "");
         }
     };
 
@@ -479,7 +483,7 @@ export default function WorkflowProductionWorkbench(props: Props) {
                                             <Form.Item label="生成画质"><Select value={imageQuality} onChange={setImageQuality} options={imageProfile.quality.values.map((value) => ({ value, label: value.toUpperCase() }))} /></Form.Item>
                                         ) : <div />}
                                     </div>
-                                    {generationCapability === "image" && imageProfile ? <ImageSizePicker profile={imageProfile} size={aspectRatio} quality={imageQuality} onChange={(size, quality) => { setAspectRatio(size); if (quality) setImageQuality(quality); }} /> : null}
+                                    {generationCapability === "image" && imageProfile ? <ImageSizePicker profile={imageProfile} size={aspectRatio} quality={imageQuality} resolution={imageResolution} onChange={(size, quality, nextResolution) => { setAspectRatio(size); if (quality) setImageQuality(quality); if (nextResolution) setImageResolution(nextResolution); }} /> : null}
                                 </div>
                                 <div className="workflow-settings-section">
                                     <div className="workflow-settings-section-title">镜头语言</div>

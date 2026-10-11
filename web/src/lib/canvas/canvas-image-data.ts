@@ -5,6 +5,20 @@ export type ImageCropRect = {
     height: number;
 };
 
+/** Flip pixels at the original resolution, keeping transparency in a lossless PNG. */
+export async function mirrorImageBlob(url: string, axis: "horizontal" | "vertical") {
+    const image = await loadImage(url);
+    const canvas = document.createElement("canvas");
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("无法初始化图片镜像工具");
+    context.translate(axis === "horizontal" ? canvas.width : 0, axis === "vertical" ? canvas.height : 0);
+    context.scale(axis === "horizontal" ? -1 : 1, axis === "vertical" ? -1 : 1);
+    context.drawImage(image, 0, 0);
+    return new Promise<Blob>((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("图片镜像导出失败")), "image/png"));
+}
+
 export type ImageAngleTransform = {
     horizontalAngle: number;
     pitchAngle: number;
@@ -159,9 +173,11 @@ function drawResizeCanvas(source: CanvasImageSource, sourceWidth: number, source
 }
 
 function loadImage(dataUrl: string) {
-    return new Promise<HTMLImageElement>((resolve) => {
+    return new Promise<HTMLImageElement>((resolve, reject) => {
         const image = new Image();
+        image.crossOrigin = "anonymous";
         image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error("无法读取图片素材，请重新上传后再操作"));
         image.src = dataUrl;
     });
 }

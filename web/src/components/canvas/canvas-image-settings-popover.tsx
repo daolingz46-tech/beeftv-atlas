@@ -32,6 +32,7 @@ export function CanvasImageSettingsPopover({ config, onConfigChange, onOpenChang
     const normalized = normalizeImageValue(profile, config);
     const summaryParts = [
         ...(profile.size.parameter !== "none" ? [imageSizeLabel(normalized.size)] : []),
+        ...(profile.resolution?.supported ? [normalized.imageResolution?.toUpperCase()] : []),
         ...(profile.quality.supported ? [imageQualityLabel(normalized.quality)] : []),
         ...(showCount && profile.maxOutputs > 1 ? [`${normalized.count} 张`] : []),
         ...(profile.transparentBackground.supported && normalized.transparentBackground === "true" ? ["透明"] : []),

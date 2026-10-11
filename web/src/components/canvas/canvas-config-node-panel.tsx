@@ -646,6 +646,7 @@ function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: Can
         ? normalizeImageValue(imageProfile, {
               size: workflowOutputSize || node.metadata?.size || globalConfig.size || defaultConfig.size,
               quality: node.metadata?.quality || workflowParameter("quality") || globalConfig.quality || defaultConfig.quality,
+              imageResolution: node.metadata?.imageResolution || globalConfig.imageResolution,
               transparentBackground: node.metadata?.transparentBackground || globalConfig.transparentBackground,
               count: String(node.metadata?.count || globalConfig.canvasImageCount || globalConfig.count || defaultConfig.count),
           })
@@ -670,6 +671,7 @@ function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: Can
         runningHub,
         model,
         quality: workflowParameter("quality") || normalizedImage?.quality || node.metadata?.quality || globalConfig.quality || defaultConfig.quality,
+        imageResolution: normalizedImage?.imageResolution || node.metadata?.imageResolution || globalConfig.imageResolution,
         size: normalizedImage?.size || normalizedVideo?.ratio || node.metadata?.size || globalConfig.size || defaultConfig.size,
         transparentBackground: normalizedImage?.transparentBackground || ((node.metadata?.transparentBackground || globalConfig.transparentBackground) === "true" ? "true" : "false"),
         videoSeconds: normalizedVideo?.seconds || normalizeVideoDuration(node.metadata?.seconds || globalConfig.videoSeconds || defaultConfig.videoSeconds),
@@ -702,6 +704,7 @@ function buildModelNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode
             ? {
                   size: node.metadata?.size,
                   quality: node.metadata?.quality,
+                  imageResolution: node.metadata?.imageResolution,
                   transparentBackground: node.metadata?.transparentBackground,
                   count: String(node.metadata?.count || globalConfig.canvasImageCount || globalConfig.count || defaultConfig.count),
               }
@@ -729,6 +732,7 @@ function buildModelNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode
         taskWorkflowProvider: "model",
         model,
         quality: generationDefaults.quality || globalConfig.quality || defaultConfig.quality,
+        imageResolution: generationDefaults.imageResolution || node.metadata?.imageResolution || globalConfig.imageResolution,
         size: generationDefaults.size ?? globalConfig.size ?? defaultConfig.size,
         transparentBackground: generationDefaults.transparentBackground || "false",
         videoSeconds: generationDefaults.videoSeconds || normalizeVideoDuration(globalConfig.videoSeconds || defaultConfig.videoSeconds),

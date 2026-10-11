@@ -258,6 +258,7 @@ export type CanvasNodeMetadata = {
     size?: string;
     quality?: string;
     transparentBackground?: string;
+    imageResolution?: string;
     count?: number;
     textCount?: number;
     seconds?: string;
@@ -286,6 +287,13 @@ export type CanvasNodeMetadata = {
     mimeType?: string;
     bytes?: number;
     durationMs?: number;
+    /** Source identity for an in-place, local media edit. */
+    localMediaEdit?: {
+        operation: "mirror-horizontal" | "mirror-vertical";
+        sourceStorageKey?: string;
+        sourceContent?: string;
+        editedAt: string;
+    };
     /** Whether the video file contains an audio track when this is known. */
     hasAudio?: boolean;
     assetId?: string;

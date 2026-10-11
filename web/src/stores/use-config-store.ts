@@ -417,6 +417,7 @@ export type AiConfig = {
     quality: string;
     size: string;
     transparentBackground: string;
+    imageResolution?: string;
     count: string;
     canvasImageCount: string;
 };

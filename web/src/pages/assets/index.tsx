@@ -12,7 +12,7 @@ import { AssetMediaPreview } from "@/components/asset-media-preview";
 import { AssetLibraryCard, AssetLibraryCardMedia } from "@/components/assets/asset-library-card";
 import { Switch } from "@/components/ui/base/switch";
 import { ownedResourceIdFromMediaRef } from "@/services/api/resources";
-import { downloadOwnedOrBrowserMedia, reportOwnedMediaSave } from "@/services/desktop-media-save";
+import { copyOwnedMediaToClipboard, downloadOwnedOrBrowserMedia, reportOwnedMediaSave } from "@/services/desktop-media-save";
 import { mediaFileExtension, sanitizeDownloadFileName } from "@/lib/canvas/canvas-media-download";
 import { cn } from "@/lib/utils";
 import { localForageStorageForScope } from "@/lib/localforage-storage";
@@ -512,8 +512,19 @@ export default function AssetsPage() {
     };
 
     const copyAssetText = async (asset: LibraryAsset) => {
-        if (asset.kind !== "text") return;
-        copyText(asset.data.content, "文本已复制");
+        if (asset.kind === "text") {
+            copyText(asset.data.content, "文本已复制");
+            return;
+        }
+        if (asset.kind !== "image" && asset.kind !== "video" && asset.kind !== "audio" && asset.kind !== "model") return;
+        const url = asset.kind === "image" ? asset.data.dataUrl : asset.data.url;
+        const extension = asset.kind === "model" ? asset.data.fileName.split(".").pop() || "glb" : mediaFileExtension(asset.data.mimeType, url) || "bin";
+        try {
+            await copyOwnedMediaToClipboard(`${asset.title || "素材"}.${extension}`, ownedResourceIdFromMediaRef(asset.data.storageKey, url));
+            message.success("文件已复制，可以直接粘贴");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "文件复制失败");
+        }
     };
 
     const downloadImage = (asset: LibraryAsset) => {
@@ -1274,6 +1285,7 @@ function AssetCard({
               ...(asset.kind === "text" || asset.kind === "image" ? [{ key: "edit", icon: <PencilLine className="size-3.5" />, label: "编辑", onClick: onEdit }] : []),
               { key: "tags", icon: <PencilLine className="size-3.5" />, label: "编辑标签", onClick: onEditTags },
               ...(asset.kind === "text" ? [{ key: "copy", icon: <Copy className="size-3.5" />, label: "复制文本", onClick: () => void onCopy(asset) }] : []),
+              ...(asset.kind === "image" || asset.kind === "video" || asset.kind === "audio" || asset.kind === "model" ? [{ key: "copy-file", icon: <Copy className="size-3.5" />, label: "复制文件", onClick: () => void onCopy(asset) }] : []),
               ...(asset.kind === "image" || asset.kind === "video" || asset.kind === "audio" || asset.kind === "model" ? [{ key: "download", icon: <Download className="size-3.5" />, label: "下载", onClick: () => onDownload(asset) }] : []),
               { key: "favorite", icon: <Star className="size-3.5" />, label: asset.metadata?.favorite === true ? "取消收藏" : "收藏", onClick: onToggleFavorite },
               { key: "move", icon: <FolderOpen className="size-3.5" />, label: "移动到分类", children: folderOptions.map((folder) => ({ key: folder.value || "uncategorized", label: folder.label, onClick: () => onMoveToFolder(folder.value) })) },

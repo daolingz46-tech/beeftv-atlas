@@ -7,15 +7,11 @@ import type { CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-p
 import { buildGenerationConfig, isGenerationCanceled } from "@/lib/canvas/canvas-project-generation";
 import { canvasGenerationPromptMetadata, canvasGenerationRequestFingerprint, runCanvasGenerationSubmissionOnce } from "@/lib/canvas/canvas-generation-submission";
 import { isGenerationTaskCapacityError } from "@/lib/canvas/canvas-generation-batch";
-import { buildPortraitTexturePrompt } from "@/lib/canvas/canvas-portrait-texture";
-import { buildCameraPrompt } from "@/lib/canvas/camera-prompt-library";
-import { buildTextRewritePrompt } from "@/lib/prompts";
-import { resolveCanvasStyleExecution } from "@/lib/canvas/canvas-style-execution";
+import { buildCanvasGenerationPrompt, prepareCanvasGenerationContent } from "@/services/canvas-generation-preparation";
 import { generationErrorMessage } from "@/lib/generation-error";
-import { modelCompatibilityError, modelGroupReferenceLimits, modelPromptLengthError, modelRequestOptions, type ModelRequirements } from "@/lib/model-selection";
+import { modelCompatibilityError, modelGroupReferenceLimits, modelRequestOptions, type ModelRequirements } from "@/lib/model-selection";
 import { navigateToSettings } from "@/lib/settings-navigation";
 import type { Skill } from "@/services/api/skills";
-import { skillRuntime } from "@/services/skill-runtime";
 import type { GenerationTask } from "@/services/api/task-center";
 import { useConfigStore, useEffectiveConfig, resolveModelRequestConfig } from "@/stores/use-config-store";
 import { seedanceReferenceRatioWarning } from "@/lib/seedance-channel-warning";
@@ -139,12 +135,7 @@ export function useCanvasGenerationExecutor({
 
                     const sourceTextContent = sourceNode?.type === CanvasNodeType.Text ? sourceNode.metadata?.content?.trim() || "" : "";
                     const editingTextNode = mode === "text" && Boolean(sourceTextContent);
-                    let generationPrompt = mode === "image" && sourceNode?.metadata?.portraitTexture ? buildPortraitTexturePrompt(prompt, sourceNode.metadata.portraitTexture) : prompt;
-                    if (mode === "image" && sourceNode?.metadata?.cameraControl?.enabled) {
-                        const cameraControl = sourceNode.metadata.cameraControl;
-                        const cameraPrompt = buildCameraPrompt({ cameraId: cameraControl.camera, lensId: cameraControl.lens, focalLengthMm: cameraControl.focalLength, apertureF: cameraControl.aperture });
-                        generationPrompt = `${generationPrompt}\n${cameraPrompt}`;
-                    }
+                    const generationPrompt = buildCanvasGenerationPrompt(sourceNode, prompt, mode);
                     const isPreparingEmptyImage = mode === "image" && sourceNode?.type === CanvasNodeType.Image && !sourceNode.metadata?.content;
 
                     let rawGenerationContext: Awaited<ReturnType<typeof hydrateNodeGenerationContext>>;
@@ -158,7 +149,7 @@ export function useCanvasGenerationExecutor({
                             nodeId,
                             nodesRef.current,
                             connectionsRef.current,
-                            editingTextNode ? buildTextRewritePrompt(sourceTextContent, prompt) : generationPrompt,
+                            generationPrompt,
                             assets,
                             promptOnly,
                         );
@@ -178,49 +169,18 @@ export function useCanvasGenerationExecutor({
                         return;
                     }
 
-                    let skillExecution: Awaited<ReturnType<typeof skillRuntime.prepare<"canvas">>>;
+                    let preparedContent: Awaited<ReturnType<typeof prepareCanvasGenerationContent>>;
                     try {
-                        skillExecution = await skillRuntime.prepare({ profile: "canvas", prompt: rawGenerationContext.prompt, skills: addedSkills });
+                        preparedContent = await prepareCanvasGenerationContent({ context: rawGenerationContext, config: generationConfig, nodes: nodesRef.current, sourceNode, mode, skills: addedSkills });
                     } catch (error) {
-                        message.error(error instanceof Error ? error.message : "技能上下文加载失败");
+                        message.error(generationErrorMessage(error));
                         return;
                     }
-                    let effectivePrompt = skillExecution.prompt.trim();
-                    let styleMetadata = {};
-                    if (mode === "image") {
-                        try {
-                            const styleRuntime = resolveCanvasStyleExecution(nodesRef.current, sourceNode, effectivePrompt, generationConfig, mode);
-                            if (styleRuntime) {
-                                effectivePrompt = styleRuntime.prompt;
-                                styleMetadata = { styleProfileJson: styleRuntime.profileJson, styleExecutionPlan: styleRuntime.plan };
-                            }
-                        } catch (error) {
-                            const errorDetails = generationErrorMessage(error);
-                            message.error(errorDetails);
-                            return;
-                        }
-                    }
-                    const promptLengthError = mode === "video" ? modelPromptLengthError(generationConfig, generationConfig.model, mode, effectivePrompt) : "";
-                    if (promptLengthError) {
-                        message.error(promptLengthError);
-                        return;
-                    }
-                    const generationContext = { ...rawGenerationContext, prompt: effectivePrompt };
+                    const { effectivePrompt, generationContext, styleMetadata, skillMetadata } = preparedContent;
+                    generationConfig = preparedContent.generationConfig;
                     if ((options?.retryContext || sourceNode?.metadata?.failedInputFingerprint || sourceNode?.metadata?.failedPromptFingerprint) && canvasGenerationRetryBlocked(sourceNode?.metadata, { ...generationContext, mode })) {
                         message.warning(sourceNode?.metadata?.errorDetails || "请先查看失败原因并调整输入，再重新生成");
                         return;
-                    }
-                    if (mode === "audio" && generationContext.characterReferences.length) {
-                        if (generationContext.characterReferences.length !== 1) {
-                            message.error("角色配音一次只能引用一个角色卡");
-                            return;
-                        }
-                        const voice = generationContext.resolvedCharacterVoices[0];
-                        if (!voice) {
-                            message.error("角色尚未绑定可用声音，无法创建角色配音任务");
-                            return;
-                        }
-                        generationConfig = { ...generationConfig, audioVoice: voice.voiceKey, audioInstructions: [voice.instructions, generationConfig.audioInstructions].filter(Boolean).join("；") };
                     }
                     if (!effectivePrompt && (mode === "text" || mode === "audio")) {
                         return;
@@ -326,7 +286,7 @@ export function useCanvasGenerationExecutor({
                         controller,
                         editingTextNode,
                         styleMetadata,
-                        skillMetadata: skillExecution.metadata,
+                        skillMetadata,
                         taskContext: options?.context,
                         retryContext: options?.retryContext,
                         setNodes,

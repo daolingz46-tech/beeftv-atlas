@@ -35,6 +35,7 @@ export const DEFAULT_VIDEO_PROMPT_MAX_CHARS = 8000;
 
 export type ImageCapabilityConfig = {
     references: {
+        minImages?: number;
         promptMaxChars: number;
         maxImages: number;
         maxImageBytes: number;
@@ -52,6 +53,7 @@ export type ImageCapabilityConfig = {
         values: string[];
         default: string;
     };
+    resolution?: { supported: boolean; values: string[]; default: string };
     transparentBackground: { supported: boolean; default: boolean };
     responseFormat: { supported: boolean };
     outputFormat: { supported: boolean };
@@ -1267,7 +1269,7 @@ function matchWorkflowValue(value: string, options: string[]) {
     return options.find((option) => option.toLowerCase() === value.toLowerCase()) || options.find((option) => option.replace(/p$/i, "").toLowerCase() === value.replace(/p$/i, "").toLowerCase()) || "";
 }
 
-export function normalizeImageValue(profile: ImageCapabilityConfig, value: { size?: string; quality?: string; count?: string; transparentBackground?: string }) {
+export function normalizeImageValue(profile: ImageCapabilityConfig, value: { size?: string; quality?: string; imageResolution?: string; count?: string; transparentBackground?: string }) {
     const size = normalizeImageSizeSetting(profile, value.size);
     const requestedQuality = String(value.quality || "")
         .trim()
@@ -1287,7 +1289,11 @@ export function normalizeImageValue(profile: ImageCapabilityConfig, value: { siz
           : presetTier || profile.quality.default || "auto";
     const count = String(Math.max(1, Math.min(profile.maxOutputs, Math.floor(Math.abs(Number(value.count)) || 1))));
     const transparentBackground = profile.transparentBackground.supported && value.transparentBackground === "true" ? "true" : "false";
-    return { size, quality, count, transparentBackground };
+    const resolution = profile.resolution;
+    const imageResolution = resolution?.supported
+        ? resolution.values.find((item) => item.toLowerCase() === value.imageResolution?.toLowerCase()) || resolution.default
+        : undefined;
+    return { size, quality, count, transparentBackground, ...(imageResolution ? { imageResolution } : {}) };
 }
 
 function imagePresetTierForSelection(profile: ImageCapabilityConfig, size: string): ImageResolutionTier | undefined {

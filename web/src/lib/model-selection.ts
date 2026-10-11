@@ -196,6 +196,7 @@ export function modelCompatibilityError(config: AiConfig, model: string, require
         if (!input) return "";
         if (input.videoCount > 0) return "图片模型不支持参考视频";
         if (input.audioCount > 0) return "图片模型不支持参考音频";
+        if (visualInputCount < (image.references.minImages || 0)) return `需要至少 ${image.references.minImages} 张参考图`;
         if (visualInputCount > 0 && image.references.maxImages === 0) return "不支持参考图，请移除参考图";
         if (visualInputCount > image.references.maxImages) return `最多支持 ${image.references.maxImages} 张参考图`;
         return "";
@@ -357,7 +358,7 @@ export function mergedImageCapabilityConfig(config: AiConfig, selected: string):
 }
 
 // 切换模型后初始化图片参数为该模型能力默认值，避免旧参数在目标模型族不兼容导致无法切换。
-export function defaultImageParamsForModel(config: AiConfig, model: string): Pick<AiConfig, "size" | "quality" | "transparentBackground"> {
+export function defaultImageParamsForModel(config: AiConfig, model: string): Pick<AiConfig, "size" | "quality" | "transparentBackground" | "imageResolution"> {
     const image = modelCapabilityConfigFor(config, model).image;
     if (!image) return { size: "1:1", quality: "auto", transparentBackground: "false" };
     const sizeValues = image.size.values.filter((value) => value !== "*");
@@ -365,11 +366,12 @@ export function defaultImageParamsForModel(config: AiConfig, model: string): Pic
     return {
         size: sizeDefault,
         quality: image.quality.default || "auto",
+        imageResolution: image.resolution?.supported ? image.resolution.default : "",
         transparentBackground: String(image.transparentBackground.default ?? false),
     };
 }
 
-export type ModelGenerationDefaults = Pick<AiConfig, "size" | "quality" | "transparentBackground" | "count" | "videoSeconds" | "vquality" | "videoGenerateAudio" | "videoWatermark">;
+export type ModelGenerationDefaults = Pick<AiConfig, "size" | "quality" | "imageResolution" | "transparentBackground" | "count" | "videoSeconds" | "vquality" | "videoGenerateAudio" | "videoWatermark">;
 
 type ModelVideoBooleanOptions = Pick<AiConfig, "videoGenerateAudio" | "videoWatermark">;
 
@@ -395,6 +397,7 @@ export function resolveModelGenerationDefaults(
         const normalized = normalizeImageValue(capabilityProfile.image, {
             size: source("size"),
             quality: source("quality"),
+            imageResolution: source("imageResolution"),
             count: source("count"),
             transparentBackground: source("transparentBackground"),
         });

@@ -79,6 +79,7 @@ type providerConfig struct {
 	Model                    string                 `json:"model"`
 	Size                     string                 `json:"size"`
 	Quality                  string                 `json:"quality"`
+	ImageResolution          string                 `json:"imageResolution"`
 	TransparentBackground    string                 `json:"transparentBackground"`
 	Count                    string                 `json:"count"`
 	VideoSeconds             string                 `json:"videoSeconds"`

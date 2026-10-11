@@ -1,6 +1,8 @@
 import { getMediaBlob } from "@/services/file-storage";
 import { AUDIO_COPY_OUTPUT_NAME, AUDIO_OUTPUT_NAME, assertUsableSegmentOutput, buildCopyAudioArgs, buildExtractAudioArgs, buildRemoveAudioArgs, buildSegmentTrimArgs, buildVideoCropArgs, CROP_OUTPUT_NAME, isFullSourceRange, MUTED_VIDEO_OUTPUT_NAME, SEGMENT_INPUT_NAME, SEGMENT_OUTPUT_NAME, WAV_OUTPUT_NAME } from "./canvas-video-segment-args";
 import { loadFFmpeg } from "./canvas-video-merge";
+import { buildVideoMirrorArgs } from "./canvas-video-segment-args";
+import { nanoid } from "nanoid";
 
 export type VideoSegmentRange = {
     startMs: number;
@@ -129,6 +131,30 @@ export async function extractVideoAudio(source: VideoSegmentSource, range: Video
 }
 
 export type VideoCropRect = { x: number; y: number; width: number; height: number };
+
+export async function mirrorVideo(source: VideoSegmentSource, axis: "horizontal" | "vertical", onProgress?: (progress: VideoSegmentProgress) => void) {
+    const ffmpeg = await loadFFmpeg(onProgress);
+    const { fetchFile } = await import("@ffmpeg/util");
+    const id = nanoid();
+    const inputName = `mirror-${id}-input.mp4`;
+    const outputName = `mirror-${id}-output.mp4`;
+    const progress = ({ progress: value }: { progress: number }) => onProgress?.({ phase: "encoding", progress: Math.min(99, Math.max(0, Math.round(value * 100))) });
+    try {
+        const blob = await readVideoSourceBlob(source);
+        onProgress?.({ phase: "reading", progress: 0 });
+        await ffmpeg.writeFile(inputName, await fetchFile(blob));
+        ffmpeg.on("progress", progress);
+        onProgress?.({ phase: "encoding", progress: 0 });
+        const exitCode = await ffmpeg.exec(["-y", ...buildVideoMirrorArgs(axis, inputName, outputName)]);
+        if (exitCode !== 0) throw new Error("视频镜像失败，请确认视频编码格式兼容");
+        const output = await ffmpeg.readFile(outputName);
+        assertUsableSegmentOutput(output, "video");
+        return new Blob([output as BlobPart], { type: "video/mp4" });
+    } finally {
+        ffmpeg.off("progress", progress);
+        await Promise.all([inputName, outputName].map((file) => ffmpeg.deleteFile(file).catch(() => undefined)));
+    }
+}
 
 /** 按源视频像素裁切画面，保留原音轨并输出新视频。 */
 export async function cropVideo(source: VideoSegmentSource, crop: VideoCropRect, onProgress?: (progress: VideoSegmentProgress) => void) {

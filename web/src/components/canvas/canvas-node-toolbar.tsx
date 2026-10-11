@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { App, Button, Dropdown, Input, Modal, Tag, Tooltip } from "antd";
 import type { MenuProps } from "antd";
-import { Camera, ChevronDown, ChevronRight, Images, Maximize2, Plus, Settings2, SlidersHorizontal, UserRound } from "lucide-react";
+import { Camera, ChevronDown, ChevronRight, FlipHorizontal2, FlipVertical2, Images, Maximize2, Plus, Settings2, SlidersHorizontal, UserRound } from "lucide-react";
+import { canMirrorCanvasMedia, type CanvasMirrorAxis } from "@/lib/canvas/canvas-media-mirror";
 
 import { canvasDockStyle } from "@/lib/canvas/canvas-aceternity-style";
 import { ASSET_CATEGORY_OPTIONS } from "@/lib/asset-category";
@@ -39,6 +40,8 @@ type CanvasNodeToolbarProps = {
     onEmotion: (node: CanvasNodeData) => void;
     onPortraitTexture: (node: CanvasNodeData) => void;
     onCrop: (node: CanvasNodeData) => void;
+    onMirror: (node: CanvasNodeData, axis: CanvasMirrorAxis) => void;
+    mirroring: boolean;
     onSplit: (node: CanvasNodeData, params: ImageSplitParams) => void;
     onUpscale: (node: CanvasNodeData) => void;
     onSuperResolve: (node: CanvasNodeData) => void;
@@ -101,6 +104,8 @@ export function CanvasNodeToolbar({
     onEmotion,
     onPortraitTexture,
     onCrop,
+    onMirror,
+    mirroring,
     onSplit,
     onUpscale,
     onSuperResolve,
@@ -373,6 +378,10 @@ export function CanvasNodeToolbar({
         else if (!toolbarRef.current?.contains(document.activeElement)) onLeave();
     };
     const dockStyle = canvasDockStyle(theme, theme.node.text);
+    const mirrorTools: ToolbarTool[] = [
+        { id: "mirror-horizontal", label: "左右镜像", icon: <FlipHorizontal2 className="size-3.5" />, group: "process", order: 10, disabled: mirroring || !canMirrorCanvasMedia(node), onClick: () => onMirror(node, "horizontal") },
+        { id: "mirror-vertical", label: "上下翻转", icon: <FlipVertical2 className="size-3.5" />, group: "process", order: 20, disabled: mirroring || !canMirrorCanvasMedia(node), onClick: () => onMirror(node, "vertical") },
+    ];
 
     return (
         <div
@@ -393,6 +402,7 @@ export function CanvasNodeToolbar({
             }}
         >
             <div role="toolbar" aria-label="节点快捷工具" className="flex h-10 max-w-full items-center gap-0.5 overflow-visible rounded-[var(--dock-radius-tight)] px-1.5 backdrop-blur-2xl" style={{ ...dockStyle, border: 0 }}>
+                {(isImage || isVideo) && Boolean(node.metadata?.content || node.metadata?.storageKey) ? <NodeDockMenuButton menuId="media-mirror" label={mirroring ? "镜像中…" : "镜像"} icon={<FlipHorizontal2 className="size-3.5" />} tools={mirrorTools} openMenuId={openMenuId} onOpenChange={handleMenuOpenChange} placement="bottomLeft" /> : null}
                 {isVideo ? (
                     <>
                         {videoProcessingTools.length ? <NodeDockMenuButton menuId="video-processing" label="视频处理" icon={null} tools={videoProcessingTools} openMenuId={openMenuId} onOpenChange={handleMenuOpenChange} placement="bottomLeft" /> : null}

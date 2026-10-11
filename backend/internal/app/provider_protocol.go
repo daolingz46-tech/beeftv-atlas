@@ -189,6 +189,15 @@ func queryProtocolAdapterVideoTask(ctx context.Context, input canvasGenerationIn
 
 func protocolRequestFromInput(input canvasGenerationInput) protocol.GenerationRequest {
 	resolution := strings.TrimSpace(input.Config.VQuality)
+	if input.Mode == "image" {
+		resolution = strings.TrimSpace(input.Config.ImageResolution)
+		if resolution == "" && input.ImageCapability != nil && input.ImageCapability.Resolution != nil {
+			resolution = input.ImageCapability.Resolution.Default
+		}
+		if resolution == "" && (input.Config.Quality == "1k" || input.Config.Quality == "2k" || input.Config.Quality == "4k") {
+			resolution = input.Config.Quality
+		}
+	}
 	if input.Mode == "video" {
 		if declared := videoResolutionNameRequest(input.VideoCapability, resolution); declared != "" {
 			resolution = declared
@@ -213,12 +222,27 @@ func protocolRequestFromInput(input canvasGenerationInput) protocol.GenerationRe
 		Watermark:     parseBool(input.Config.VideoWatermark, false),
 		Operation:     firstNonEmpty(metadataString(input.Metadata, "videoEditOperation"), metadataString(input.Metadata, "videoOperation")),
 		Extra: map[string]any{
-			"videoSeconds": input.Config.VideoSeconds,
-			"audioVoice":   resolvedAudioSpeechVoice(input.Config.Model, input.Config.AudioVoice),
-			"audioFormat":  defaultString(input.Config.AudioFormat, "mp3"),
-			"audioSpeed":   defaultString(input.Config.AudioSpeed, "1"),
-			"count":        input.Config.Count,
+			"transparentBackground": input.Config.TransparentBackground,
+			"videoSeconds":          input.Config.VideoSeconds,
+			"audioVoice":            resolvedAudioSpeechVoice(input.Config.Model, input.Config.AudioVoice),
+			"audioFormat":           defaultString(input.Config.AudioFormat, "mp3"),
+			"audioSpeed":            defaultString(input.Config.AudioSpeed, "1"),
+			"count":                 input.Config.Count,
 		},
+	}
+	if input.Mode == "image" {
+		// Declarative image adapters read extra.size; AspectRatio is a separate
+		// contract used by adapters that perform their own ratio mapping.
+		size := strings.TrimSpace(input.Config.Size)
+		if size == "" && input.ImageCapability != nil {
+			size = strings.TrimSpace(input.ImageCapability.Size.Default)
+		}
+		if key, value := imageSizeParameter(input.ImageCapability, size); key == "size" && value != "" {
+			size = value
+		}
+		if size != "" {
+			request.Extra["size"] = size
+		}
 	}
 	for _, message := range input.TextHistory {
 		role := strings.ToLower(strings.TrimSpace(message.Role))
@@ -241,6 +265,9 @@ func protocolRequestFromInput(input canvasGenerationInput) protocol.GenerationRe
 	}
 	if count, err := strconv.Atoi(strings.TrimSpace(input.Config.Count)); err == nil && count > 0 {
 		request.ImageCount = count
+	}
+	if input.Mode == "image" && request.ImageCount == 0 {
+		request.ImageCount = 1
 	}
 	request.Output = protocol.OutputOptions{
 		Count: request.ImageCount, Duration: request.Duration, AspectRatio: request.AspectRatio,

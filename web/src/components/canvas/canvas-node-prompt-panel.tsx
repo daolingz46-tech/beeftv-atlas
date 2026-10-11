@@ -31,11 +31,13 @@ import { promptOptimizerPlugin, PROMPT_OPTIMIZER_PLUGIN_ID } from "@/lib/plugins
 import { createPluginHostContext } from "@/services/plugin-host";
 import { usePluginStore } from "@/stores/use-plugin-store";
 import { useResolvedCanvasResourceReferences } from "./use-resolved-canvas-resource-references";
+import type { Skill } from "@/services/api/skills";
 
 export type CanvasNodeGenerationMode = CanvasGenerationMode;
 
 type CanvasNodePromptPanelProps = {
     projectId: string;
+    addedSkills: Skill[];
     node: CanvasNodeData;
     isRunning: boolean;
     onPromptChange: (nodeId: string, prompt: string) => void;
@@ -69,7 +71,7 @@ const PROMPT_EDITOR_MODAL_WIDTH = "min(1200px, 92vw)";
 const PROMPT_EDITOR_MODAL_DEFAULT_WIDTH = 1200;
 const PROMPT_EDITOR_MODAL_DEFAULT_HEIGHT = 420;
 
-export function CanvasNodePromptPanel({ projectId, node, isRunning, onPromptChange, onConfigChange, onGenerate, mentionReferences = [], onAddReference, onRemoveReference, onReorderReferences, onReplaceReference, onReplaceReferenceFiles, onClose, onNodeMouseDown, onImageSettingsOpenChange, workspaceMode = "professional" }: CanvasNodePromptPanelProps) {
+export function CanvasNodePromptPanel({ projectId, addedSkills, node, isRunning, onPromptChange, onConfigChange, onGenerate, mentionReferences = [], onAddReference, onRemoveReference, onReorderReferences, onReplaceReference, onReplaceReferenceFiles, onClose, onNodeMouseDown, onImageSettingsOpenChange, workspaceMode = "professional" }: CanvasNodePromptPanelProps) {
     const globalConfig = useEffectiveConfig();
     const themeName = useActiveTheme();
     const theme = canvasThemes[themeName];
@@ -112,6 +114,7 @@ export function CanvasNodePromptPanel({ projectId, node, isRunning, onPromptChan
             ...globalConfig,
             size: node.metadata?.size || globalConfig.size,
             quality: node.metadata?.quality || globalConfig.quality,
+            imageResolution: node.metadata?.imageResolution || globalConfig.imageResolution,
             count: String(node.metadata?.count || globalConfig.count),
             transparentBackground: node.metadata?.transparentBackground || globalConfig.transparentBackground,
             videoSeconds: node.metadata?.seconds || globalConfig.videoSeconds,
@@ -136,7 +139,7 @@ export function CanvasNodePromptPanel({ projectId, node, isRunning, onPromptChan
         return promptOptimizerPlugin.createPromptOptimizer(createPluginHostContext(promptOptimizerPlugin, promptOptimizerInstallation, globalConfig));
     }, [globalConfig, promptOptimizerEnabled, promptOptimizerInstallation]);
     const priceChannel = resolveModelChannel(config, config.model);
-    const cost = useGenerationCostEstimate(projectId, node, config, prompt, mode);
+    const cost = useGenerationCostEstimate(projectId, node, config, prompt, mode, addedSkills);
     const activeReferenceCount = activeReferences.length;
     const videoFrameOptions = resolvedMentionReferences.filter((item) => item.active && item.kind === "image").map((item) => ({ nodeId: item.nodeId, label: item.label, title: item.title, previewUrl: item.previewUrl }));
     const hasVideoPromptTools = mode === "video" && !simpleMode && videoFrameOptions.length > 0;
@@ -1066,6 +1069,7 @@ export function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mo
             ? {
                   size: node.metadata?.size,
                   quality: node.metadata?.quality,
+                  imageResolution: node.metadata?.imageResolution,
                   transparentBackground: node.metadata?.transparentBackground,
                   videoWatermark: node.metadata?.watermark,
                   count: String(node.metadata?.count || globalConfig.canvasImageCount || globalConfig.count || defaultConfig.count),
@@ -1092,6 +1096,7 @@ export function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mo
         ...globalConfig,
         model,
         quality: defaults.quality ?? globalConfig.quality ?? defaultConfig.quality,
+        imageResolution: defaults.imageResolution ?? node.metadata?.imageResolution ?? globalConfig.imageResolution,
         size: defaults.size ?? globalConfig.size ?? defaultConfig.size,
         transparentBackground: defaults.transparentBackground ?? "false",
         videoSeconds: defaults.videoSeconds || normalizeVideoDuration(globalConfig.videoSeconds || defaultConfig.videoSeconds),
