@@ -12,7 +12,6 @@ import { CanvasNodeType, type CanvasNodeData, type ViewportTransform } from "@/t
 
 const MINIMAP_WIDTH = 240;
 const MINIMAP_HEIGHT = 160;
-const MINIMAP_IMAGE_PREVIEW_LIMIT = 24;
 
 export function Minimap({ nodes, viewport, viewportSize, canvasContainerRef, onViewportPreviewChange, onViewportChange }: { nodes: CanvasNodeData[]; viewport: ViewportTransform; viewportSize: { width: number; height: number }; canvasContainerRef?: RefObject<HTMLDivElement | null>; onViewportPreviewChange?: (viewport: ViewportTransform) => void; onViewportChange: (viewport: ViewportTransform) => void }) {
     const theme = canvasThemes[useActiveTheme()];
@@ -58,14 +57,6 @@ export function Minimap({ nodes, viewport, viewportSize, canvasContainerRef, onV
             offset: { x: (width - mapContentW) / 2, y: (height - mapContentH) / 2 },
         };
     }, [displayNodes]);
-
-    // Keep a bounded set of useful previews even on large canvases. Tiny nodes
-    // use their type color rather than downloading an invisible full image.
-    const imagePreviewIds = useMemo(() => new Set(displayNodes
-        .filter(node => node.type === CanvasNodeType.Image && Boolean(getImagePreviewSource(node) || node.metadata?.storageKey)
-            && node.width * scale >= 8 && node.height * scale >= 8)
-        .sort((a, b) => b.width * b.height - a.width * a.height)
-        .slice(0, MINIMAP_IMAGE_PREVIEW_LIMIT).map(node => node.id)), [displayNodes, scale]);
 
     const toMinimap = useCallback(
         (worldX: number, worldY: number) => {
@@ -173,7 +164,7 @@ export function Minimap({ nodes, viewport, viewportSize, canvasContainerRef, onV
                     const pos = toMinimap(node.position.x, node.position.y);
                     const frame = isFrameNode(node);
                     const color = node.type === CanvasNodeType.Image ? "#10b981" : node.type === CanvasNodeType.Video ? "#f97316" : node.type === CanvasNodeType.Audio ? "#a855f7" : node.type === CanvasNodeType.Config ? "#60a5fa" : node.type === CanvasNodeType.Skill ? "#818cf8" : frame ? theme.frame.stroke : theme.node.muted;
-                    const showImagePreview = imagePreviewIds.has(node.id);
+                    const showImagePreview = node.type === CanvasNodeType.Image;
                     const imagePreviewSource = showImagePreview ? getImagePreviewSource(node) : "";
                     const nodeLabel = node.title?.trim() || getNodeLabel(node.type);
                     return (
@@ -190,16 +181,17 @@ export function Minimap({ nodes, viewport, viewportSize, canvasContainerRef, onV
                                 height: Math.max(node.height * scale, 2),
                                 backgroundColor: frame ? (node.metadata?.frame?.collapsed ? theme.frame.preview : "transparent") : color,
                                 border: frame ? `1px solid ${color}` : undefined,
-                                opacity: frame ? 0.95 : 0.8,
+                                opacity: frame ? 0.95 : showImagePreview ? 1 : 0.8,
                             }}
                         >
-                            <div className="absolute inset-0 overflow-hidden rounded-[1px]">
+                            <div className="minimap-image-preview absolute inset-0 overflow-hidden rounded-[1px] [&>.cached-resource-image-shell]:block [&>.cached-resource-image-shell]:size-full">
                                 {imagePreviewSource || (showImagePreview && node.metadata?.storageKey) ? (
                                     <CachedResourceImage
                                         storageKey={node.metadata?.storageKey}
                                         src={imagePreviewSource}
                                         alt=""
-                                        loading="lazy"
+                                        eager
+                                        loading="eager"
                                         decoding="async"
                                         draggable={false}
                                         className="size-full object-cover"
