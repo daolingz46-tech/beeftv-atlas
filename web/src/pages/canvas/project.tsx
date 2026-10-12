@@ -1491,8 +1491,8 @@ function InfiniteCanvasPage() {
         [bringNodeToFront, nodesRef],
     );
 
-    const handleNodeFileDrag = useCallback((selectedNodes: CanvasNodeData[], onTakeOver: () => void) =>
-        armDesktopNodeDrag(selectedNodes, onTakeOver, text => message.error(text)), [message]);
+    const handleNodeFileDrag = useCallback((selectedNodes: CanvasNodeData[], onTakeOver: () => void, immediate: boolean) =>
+        armDesktopNodeDrag(selectedNodes, onTakeOver, text => message.error(text), immediate), [message]);
 
     const { alignmentGuides, cancelSelectionBox, deselectCanvas, dragPreview, frameDropTargetId, handleCanvasMouseDown, handleNodeMouseDown, isNodeDragging, nodeDraggingRef, selectionBoundsElementRef, selectionBox } = useCanvasSelectionController({
         containerRef,

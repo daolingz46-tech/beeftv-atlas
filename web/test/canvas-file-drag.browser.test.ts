@@ -13,7 +13,7 @@ beforeAll(async () => {
 afterAll(async () => { await browser?.close(); server?.stop(true); });
 async function pageFixture() { const page = await browser.newPage(); await page.goto(server.url.toString()); await page.locator('[data-node-id="image"]').waitFor(); return page; }
 async function state(page: Page) { return JSON.parse(await page.locator("#state").textContent() || "{}"); }
-async function move(page: Page) { await page.mouse.move(150, 150); await page.mouse.down(); await page.mouse.move(190, 210, { steps: 8 }); }
+async function move(page: Page) { await page.mouse.move(150, 110); await page.mouse.down(); await page.mouse.move(190, 170, { steps: 8 }); }
 
 test("ordinary canvas dragging commits its position and cancels only the native watcher", async () => {
     const page = await pageFixture();
@@ -43,5 +43,30 @@ test("blur cancels the node gesture without persisting temporary positions", asy
 test("a quick off-window release cannot commit a node beyond the window before native handoff", async () => {
     const page = await pageFixture();
     try { const before = (await state(page)).nodes; await move(page); await page.evaluate(() => window.dispatchEvent(new MouseEvent("mouseup", { clientX: -20, clientY: 210 }))); await page.mouse.up(); expect((await state(page)).nodes).toEqual(before); expect((await state(page)).dragging).toBe(false); }
+    finally { await page.close(); }
+});
+test("dragging the media surface requests immediate file transfer and never moves the node", async () => {
+    const page = await pageFixture();
+    try {
+        const before = (await state(page)).nodes;
+        await page.mouse.move(120, 150); await page.mouse.down(); await page.mouse.move(170, 190, { steps: 8 });
+        expect(await page.evaluate(() => (window as any).fileDragFixture.calls.at(-1).immediate)).toBe(true);
+        expect(await page.locator('[data-node-id="image"]').evaluate(element => element.style.translate)).toBe("");
+        await page.mouse.up(); expect((await state(page)).nodes).toEqual(before);
+    } finally { await page.close(); }
+});
+test("ordinary header drag uses the existing window-boundary handoff", async () => {
+    const page = await pageFixture();
+    try { await move(page); expect(await page.evaluate(() => (window as any).fileDragFixture.calls.at(-1).immediate)).toBe(false); await page.mouse.up(); }
+    finally { await page.close(); }
+});
+test("media playback controls do not arm file dragging", async () => {
+    const page = await pageFixture();
+    try { await page.getByRole("button", { name: "image-播放" }).click(); expect(await page.evaluate(() => (window as any).fileDragFixture.calls.length)).toBe(0); }
+    finally { await page.close(); }
+});
+test("Alt drag from a media surface keeps canvas duplication", async () => {
+    const page = await pageFixture();
+    try { await page.keyboard.down("Alt"); await page.mouse.move(120, 150); await page.mouse.down(); await page.mouse.move(170, 190, { steps: 8 }); await page.mouse.up(); await page.keyboard.up("Alt"); expect(await page.evaluate(() => (window as any).fileDragFixture.calls.length)).toBe(0); expect(await page.evaluate(() => (window as any).fileDragFixture.duplicates)).toBe(1); }
     finally { await page.close(); }
 });

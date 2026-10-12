@@ -374,6 +374,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                 className="canvas-node-shell relative h-full w-full overflow-visible rounded-[var(--node-radius)]"
                 data-node-selected={isSelected ? "true" : "false"}
                 data-node-state={nodeState}
+                data-node-file-drag={(hasImageContent || hasVideoContent || hasAudioContent) && !isBatchRoot && !annotationActive && !maskEditActive && !imageCropActive && !videoCropActive ? "true" : undefined}
                 data-connection-tilt={connectionTilt ? "true" : undefined}
                 data-state={data.metadata?.status || (isActive ? "active" : isRelated ? "related" : "idle")}
                 style={{

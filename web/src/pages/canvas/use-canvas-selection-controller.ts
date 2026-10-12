@@ -6,6 +6,7 @@ import { applyFrameDrop, buildCanvasFrameDropIndex, findFrameDropTargetFromIndex
 import { applyCanvasSelectionStrategy, canvasSelectionHitsBounds, createCanvasSelectionBounds, createCanvasSelectionSpatialIndexCache, resolveCanvasSelectionHitMode, resolveCanvasSelectionPreviewDelta, resolveCanvasSelectionStrategy } from "@/lib/canvas/canvas-selection";
 import { canvasNodeBounds } from "@/lib/canvas/canvas-spatial-index";
 import type { CanvasNodeData, Position, SelectionBox, ViewportTransform } from "@/types/canvas";
+import { supportsDesktopNodeDrag } from "@/services/desktop-node-drag";
 
 type UseCanvasSelectionControllerOptions = {
     containerRef: RefObject<HTMLDivElement | null>;
@@ -24,7 +25,7 @@ type UseCanvasSelectionControllerOptions = {
     onNodeClick: (node: CanvasNodeData) => void;
     onNodeDragEnd?: (nodeId: string) => void;
     onDuplicateDrag?: (nodeIds: Set<string>, offset: Position) => void;
-    onNodeFileDrag?: (nodes: CanvasNodeData[], onTakeOver: () => void) => (() => void) | undefined;
+    onNodeFileDrag?: (nodes: CanvasNodeData[], onTakeOver: () => void, immediate: boolean) => (() => void) | undefined;
     onBatchConnectionTarget?: (event: ReactMouseEvent | ReactPointerEvent, nodeId: string) => boolean;
     onLinkedFolderDrop?: (folder: CanvasNodeData, nodes: CanvasNodeData[]) => void;
     onDeselect: () => void;
@@ -36,6 +37,7 @@ type DragState = {
     hasMoved: boolean;
     openPanelOnClick: boolean;
     duplicate: boolean;
+    fileExportOnly: boolean;
     startX: number;
     startY: number;
     draggedNodeIds: string[];
@@ -53,6 +55,7 @@ const EMPTY_DRAG_STATE: DragState = {
     hasMoved: false,
     openPanelOnClick: true,
     duplicate: false,
+    fileExportOnly: false,
     startX: 0,
     startY: 0,
     draggedNodeIds: [],
@@ -169,6 +172,10 @@ export function useCanvasSelectionController({
     const handleNodeMouseDown = useCallback((event: ReactMouseEvent | ReactPointerEvent, nodeId: string) => {
         event.stopPropagation();
         if (event.button !== 0) return;
+        const target = event.target instanceof Element ? event.target : null;
+        const mediaBody = Boolean(target?.closest('[data-node-file-drag="true"]'));
+        if (mediaBody && target?.closest('button,input,textarea,select,a,[contenteditable="true"],[role="slider"],[role="button"],[role="combobox"],[data-canvas-no-file-drag]')) return;
+        const fileExportOnly = mediaBody && !event.altKey && Boolean(onNodeFileDrag) && supportsDesktopNodeDrag();
         if (onBatchConnectionTarget?.(event, nodeId)) return;
         // Paint order is session-local UI state. Update it once at the start
         // of a real node interaction so dragging also survives deselection.
@@ -199,13 +206,13 @@ export function useCanvasSelectionController({
         }
 
         const clickedNode = currentNodes.find((node) => node.id === nodeId);
-        if (clickedNode?.metadata?.locked) {
+        if (clickedNode?.metadata?.locked && !fileExportOnly) {
             dragRef.current = { ...EMPTY_DRAG_STATE };
             onNodeClick(clickedNode);
             return;
         }
 
-        const draggedNodeIds = currentNodes.filter((node) => nextSelected.has(node.id) && !node.metadata?.locked && !(node.parentId && nextSelected.has(node.parentId))).map((node) => node.id);
+        const draggedNodeIds = currentNodes.filter((node) => nextSelected.has(node.id) && (fileExportOnly || !node.metadata?.locked) && !(node.parentId && nextSelected.has(node.parentId))).map((node) => node.id);
         const dragIds = new Set(nextSelected);
         currentNodes.forEach((node) => {
             if (nextSelected.has(node.id)) node.metadata?.batchChildIds?.forEach((childId) => dragIds.add(childId));
@@ -214,14 +221,14 @@ export function useCanvasSelectionController({
         currentNodes.forEach((node) => {
             if (dragIds.has(node.id)) node.metadata?.batchChildIds?.forEach((childId) => dragIds.add(childId));
         });
-        const initialSelectedNodes = currentNodes.filter((node) => dragIds.has(node.id) && !node.metadata?.locked).map((node) => ({ id: node.id, x: node.position.x, y: node.position.y }));
+        const initialSelectedNodes = currentNodes.filter((node) => dragIds.has(node.id) && (fileExportOnly || !node.metadata?.locked)).map((node) => ({ id: node.id, x: node.position.x, y: node.position.y }));
         if (!initialSelectedNodes.length) return;
 
         frameDropIndexRef.current = buildCanvasFrameDropIndex(currentNodes);
-        draggedNodesRef.current = currentNodes.filter((node) => dragIds.has(node.id) && !node.metadata?.locked);
+        draggedNodesRef.current = currentNodes.filter((node) => dragIds.has(node.id) && (fileExportOnly || !node.metadata?.locked));
         const draggedRenderNodeIds = initialSelectedNodes.map((item) => item.id);
         const draggedRenderNodeIdSet = new Set(draggedRenderNodeIds);
-        dragRef.current = { isDraggingNode: true, hasMoved: false, openPanelOnClick: !isMultiSelectClick && !duplicate, duplicate, startX: event.clientX, startY: event.clientY, draggedNodeIds, draggedRenderNodeIds, draggedRenderNodeIdSet, initialSelectedNodes };
+        dragRef.current = { isDraggingNode: true, hasMoved: false, openPanelOnClick: !isMultiSelectClick && !duplicate, duplicate, fileExportOnly, startX: event.clientX, startY: event.clientY, draggedNodeIds, draggedRenderNodeIds, draggedRenderNodeIdSet, initialSelectedNodes };
         historyPausedRef.current = true;
         nodeDraggingRef.current = true;
         pendingNodeDragRef.current = { x: 0, y: 0 };
@@ -230,14 +237,14 @@ export function useCanvasSelectionController({
         setIsNodeDragging(true);
         if (containerRef.current) containerRef.current.dataset.canvasNodeDragging = "true";
         setAlignmentGuides({});
-        setDragPreview(duplicate ? null : { x: 0, y: 0, nodeIds: draggedRenderNodeIdSet });
-        if (!duplicate) applyCanvasNodeDragPreview(containerRef.current, { x: 0, y: 0, nodeIds: draggedRenderNodeIdSet });
+        setDragPreview(duplicate || fileExportOnly ? null : { x: 0, y: 0, nodeIds: draggedRenderNodeIdSet });
+        if (!duplicate && !fileExportOnly) applyCanvasNodeDragPreview(containerRef.current, { x: 0, y: 0, nodeIds: draggedRenderNodeIdSet });
         // Alt remains canvas duplication; direct dragging can cross into a
         // native file copy without committing the temporary canvas positions.
         const fileDragGeneration = ++fileDragGenerationRef.current;
         if (!duplicate) cancelFileDragRef.current = onNodeFileDrag?.(draggedNodesRef.current, () => {
             if (fileDragGenerationRef.current === fileDragGeneration) cancelNodeDragRef.current();
-        });
+        }, fileExportOnly);
     }, [containerRef, historyPausedRef, nodesRef, onBatchConnectionTarget, onDuplicateDrag, onNodeFileDrag, onNodeBringToFront, onNodeClick, onNodeInteractionStart, selectedNodeIdsRef, setSelectedConnectionId, setSelectedNodeIds]);
 
     const finishNodeDrag = useCallback((clientX?: number, clientY?: number, cancelled = false) => {
@@ -251,6 +258,7 @@ export function useCanvasSelectionController({
         // move when the user intended to export the node.
         cancelled ||= Boolean(cancelFileDragRef.current) && clientX != null && clientY != null &&
             (clientX < 0 || clientY < 0 || clientX >= window.innerWidth || clientY >= window.innerHeight);
+        cancelled ||= dragRef.current.fileExportOnly && dragRef.current.hasMoved;
         const shouldOpenPanelOnClick = dragRef.current.openPanelOnClick;
         cancelFileDragRef.current?.();
         cancelFileDragRef.current = undefined;
@@ -306,6 +314,7 @@ export function useCanvasSelectionController({
         const currentViewport = viewportRef.current;
         pendingNodeDragRef.current = { x: (event.clientX - dragRef.current.startX) / currentViewport.k, y: (event.clientY - dragRef.current.startY) / currentViewport.k };
         if (Math.abs(event.clientX - dragRef.current.startX) > 3 || Math.abs(event.clientY - dragRef.current.startY) > 3) dragRef.current.hasMoved = true;
+        if (dragRef.current.fileExportOnly) return;
         if (dragFrameRef.current) return;
         dragFrameRef.current = requestAnimationFrame(() => {
             const aligned = calculateNodeAlignment(alignmentContextRef.current, pendingNodeDragRef.current, 7 / viewportRef.current.k);

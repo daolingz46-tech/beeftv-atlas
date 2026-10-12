@@ -26,9 +26,9 @@ type nodeFileDragSession struct {
 	started atomic.Bool
 }
 
-// Arm only observes the gesture. Files are prepared once the held pointer leaves
-// the app window; normal clicks and canvas moves do not copy large media files.
-func (a *DesktopApp) ArmNodeFileDrag(gestureID string, files []NodeDragFile) (string, error) {
+// Media-surface drags hand off after movement; header drags wait until the held
+// pointer leaves the app window. Ordinary clicks never copy large media files.
+func (a *DesktopApp) ArmNodeFileDrag(gestureID string, files []NodeDragFile, immediate bool) (string, error) {
 	if len(gestureID) == 0 || len(gestureID) > 128 || len(files) == 0 || len(files) > 256 {
 		return "", errors.New("请选择 1 到 256 个节点")
 	}
@@ -49,7 +49,7 @@ func (a *DesktopApp) ArmNodeFileDrag(gestureID string, files []NodeDragFile) (st
 		}
 		a.fileDragMu.Unlock()
 	}()
-	return watchNativeFileDrag(ctx, func() ([]string, error) {
+	return watchNativeFileDrag(ctx, immediate, func() ([]string, error) {
 		session.started.Store(true)
 		a.mu.RLock()
 		wailsCtx := a.wailsCtx

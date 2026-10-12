@@ -3,6 +3,11 @@ import { buildNodeDragFiles } from "../src/services/desktop-node-drag";
 import { CanvasNodeType, type CanvasNodeData } from "../src/types/canvas";
 
 function node(type: CanvasNodeType, content: string): CanvasNodeData { return { id: "test", type, title: "../测试", position: { x: 0, y: 0 }, width: 100, height: 100, metadata: { content } }; }
+test("existing MP4 and JPEG file names do not get duplicated extensions", () => {
+    const video = node(CanvasNodeType.Video, ""); video.title = "source.mp4";
+    const image = node(CanvasNodeType.Image, ""); image.title = "photo.jpeg"; image.metadata!.mimeType = "image/jpeg";
+    expect(buildNodeDragFiles([video, image]).map(file => file.fileName)).toEqual(["source.mp4", "photo.jpg"]);
+});
 test("text and markup export actual multiline content with matching extensions", () => {
     for (const [type, extension] of [[CanvasNodeType.Text, "txt"], [CanvasNodeType.Markdown, "md"], [CanvasNodeType.Html, "html"], [CanvasNodeType.Svg, "svg"]] as const) expect(buildNodeDragFiles([node(type, "first\nsecond")])).toEqual([{ fileName: `测试.${extension}`, text: "first\nsecond" }]);
 });

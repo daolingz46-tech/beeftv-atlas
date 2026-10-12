@@ -42,7 +42,7 @@ Wails / local dev
 | 外部 Agent MCP | `tools/beeftv-mcp`、`backend/cmd/desktop/mcp_discovery*` | stdio 工具、私有桌面会话发现、费用查询与异步生成任务桥接 |
 | 本机 MCP | `backend/cmd/beeftv` | `beeftv mcp serve` 使用官方 MCP SDK，经 `/api/ops` 访问本机工作区 |
 | 桌面媒体剪贴板 | `backend/cmd/desktop/clipboard_media*` | 校验资源归属并准备单个或多个媒体副本，Windows 一次写入文件剪贴板 |
-| 桌面节点拖出 | `backend/cmd/desktop/file_drag*`、`web/src/services/desktop-node-drag.ts` | 监听按住鼠标跨出窗口的手势；校验资源归属并暂存副本，经 STA / OLE 的 CF_HDROP 交给 Windows，仅允许复制；不依赖剪贴板 |
+| 桌面节点拖出 | `backend/cmd/desktop/file_drag*`、`web/src/services/desktop-node-drag.ts` | 媒体内容区移动后直接交接，标题拖动等到跨出窗口；校验资源归属并暂存副本，经 STA / OLE 的 CF_HDROP 交给 Windows，仅允许复制；不依赖剪贴板 |
 | 桌面更新发布 | `backend/cmd/update-release` | 生成更新密钥、打包 zip、签署 `desktop-update.json` |
 | 前端 | `web/src` | React 画布、项目、素材、模型配置与插件 UI |
 | 图片工具预览 | `web/src/components/canvas/canvas-image-tool-source.tsx` | 多角度与打光共用的认证素材读取、图片解码、失败重试和过期结果隔离 |

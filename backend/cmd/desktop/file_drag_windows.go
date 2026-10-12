@@ -111,7 +111,7 @@ func dragPointOwnedByProcess(point dragPoint) bool {
 	return pid == uint32(os.Getpid())
 }
 
-func watchNativeFileDrag(ctx context.Context, prepare func() ([]string, error)) (string, error) {
+func watchNativeFileDrag(ctx context.Context, immediate bool, prepare func() ([]string, error)) (string, error) {
 	// COM objects and the OLE message loop must remain on one initialized STA.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -143,7 +143,7 @@ func watchNativeFileDrag(ctx context.Context, prepare func() ([]string, error)) 
 			if absDrag(point.X-start.X) < 6 && absDrag(point.Y-start.Y) < 6 {
 				continue
 			}
-			if point.X >= rect.Left && point.X < rect.Right && point.Y >= rect.Top && point.Y < rect.Bottom && dragPointOwnedByProcess(point) {
+			if !immediate && point.X >= rect.Left && point.X < rect.Right && point.Y >= rect.Top && point.Y < rect.Bottom && dragPointOwnedByProcess(point) {
 				continue
 			}
 			// Cancel WebView capture on its UI thread before handing pointer tracking

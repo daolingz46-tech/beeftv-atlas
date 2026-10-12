@@ -101,7 +101,11 @@ func TestWindowsFileDragLive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	prepared := 0
-	result, err := watchNativeFileDrag(ctx, func() ([]string, error) { prepared++; return paths, nil })
+	result, err := watchNativeFileDrag(ctx, os.Getenv("BEEFTV_FILE_DRAG_TEST_IMMEDIATE") == "1", func() ([]string, error) {
+		prepared++
+		_ = os.WriteFile(os.Getenv("BEEFTV_FILE_DRAG_TEST_READY")+"-immediate", []byte("ready"), 0600)
+		return paths, nil
+	})
 	if err != nil || result != "dropped" {
 		t.Fatalf("native drop: %s, %v, preparations=%d", result, err, prepared)
 	}
