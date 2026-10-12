@@ -15,6 +15,7 @@ export const GENERATION_ERROR_CATEGORIES = [
     "moderation_reference",
     "moderation_output",
     "invalid_params",
+    "workspace_unavailable",
     "local_storage",
     "canvas_conflict",
     "context_too_long",
@@ -111,6 +112,7 @@ const CATEGORY_COPY: Record<GenerationErrorCategory, CategoryCopy> = {
     moderation_reference: { reason: "参考素材未通过内容安全审核", action: "请检查并更换参考素材后重新生成" },
     moderation_output: { reason: "生成结果未通过内容安全审核", action: "请调整提示词或参考素材后重新生成" },
     invalid_params: { reason: "模型不接受当前参数", action: "请检查模型、尺寸、时长、格式或数量后重试" },
+    workspace_unavailable: { reason: "当前画布或项目不可用，尚未提交生成", action: "请返回画布列表打开有效画布，或先新建、导入画布后再生成" },
     local_storage: { reason: "本地数据库无法读写", action: "请重启应用；若仍失败，请保留排查信息并联系支持，不要重复生成" },
     canvas_conflict: { reason: "生成结果已保留，画布尚未更新", action: "请先使用画布最新版本，再重新加载资源，不要重新生成" },
     context_too_long: { reason: "输入内容超出模型长度限制", action: "请缩短提示词或减少参考内容后重试" },
@@ -374,14 +376,14 @@ export function formatGenerationDiagnostics(explanation: GenerationFailureExplan
         `原因：${sanitizeProviderText(explanation.reason)}`,
         explanation.action ? `下一步：${sanitizeProviderText(explanation.action)}` : "",
         `类别：${explanation.category}`,
-        `错误来源：${explanation.category === "local_storage" ? "本地任务存储" : ({ local_validation: "本地参数校验", upstream_http: "上游 HTTP 响应", upstream_response: "上游业务响应", local_result: "本地结果处理", local_response: "本地响应大小限制", client_result: "画布应用结果", unknown: "未记录" } as Record<string, string>)[evidence?.source || "unknown"] || "未记录"}`,
+        `错误来源：${explanation.category === "workspace_unavailable" ? "本机画布或项目校验" : explanation.category === "local_storage" ? "本地任务存储" : ({ local_validation: "本地参数校验", upstream_http: "上游 HTTP 响应", upstream_response: "上游业务响应", local_result: "本地结果处理", local_response: "本地响应大小限制", client_result: "画布应用结果", unknown: "未记录" } as Record<string, string>)[evidence?.source || "unknown"] || "未记录"}`,
         `错误摘要：${sanitizeProviderText(evidence?.summary || context.errorSummary || explanation.summary || "") || "未记录"}`,
         evidence && ["upstream_http", "upstream_response"].includes(evidence.source) && sanitizeProviderCode(evidence.providerCode || "") ? `上游代码：${sanitizeProviderCode(evidence.providerCode || "")}` : "",
         evidence?.httpStatus && Number.isInteger(evidence.httpStatus) && evidence.httpStatus >= 100 && evidence.httpStatus <= 599 ? `HTTP 状态：${evidence.httpStatus}` : "",
         sanitizeProviderCode(evidence?.param || "") ? `参数：${sanitizeProviderCode(evidence?.param || "")}` : "",
         sanitizeProviderText(evidence?.stage || context.stage || "") ? `失败阶段：${sanitizeProviderText(evidence?.stage || context.stage || "")}` : "",
         taskId ? `任务 ID：${taskId}` : "",
-        `请求 ID：${requestId || "未记录"}`,
+        `请求 ID：${requestId || (explanation.category === "workspace_unavailable" ? "未发起模型请求" : "未记录")}`,
         sanitizeDebugId(evidence?.providerTaskId) ? `上游任务 ID：${sanitizeDebugId(evidence?.providerTaskId)}` : "",
         sanitizeDebugId(context.providerRequestId) ? `服务端关联 ID：${sanitizeDebugId(context.providerRequestId)}` : "",
         model ? `模型：${model}` : "",
@@ -439,9 +441,12 @@ type Classified = {
 
 function classifyUnknown(error: unknown, context: GenerationFailureContext): Classified {
     if (context.stage === "submission_unknown") return { category: "submission_uncertain", uncertain: true, retryable: false };
+    if (context.errorSummary === "当前画布或项目不可用，无法创建生成任务") return { category: "workspace_unavailable", retryable: false };
     if (!error) return { category: "unknown", retryable: false };
     if (typeof error === "object" && error) {
     const record = error as Record<string, unknown>;
+        if (record.reason === "task_scope_unavailable" || record.message === "当前画布或项目不可用，无法创建生成任务") return { category: "workspace_unavailable", fromCode: true, retryable: false };
+        if (record.reason === "task_scope_archived") return { category: "workspace_unavailable", reason: "项目已归档，尚未提交生成", action: "请取消项目归档，或在有效的新画布中重新配置后生成", fromCode: true, retryable: false };
         if (record.reason === "local_storage_failed") return { category: "local_storage", ...LOCAL_TASK_ADMISSION_FAILURE, fromCode: true, retryable: false };
         if (record.name === "ApiError" && record.reason === "quota_exceeded") {
             return { category: "quota_limit", reason: sanitizeProviderText(String(record.message || "工作区用量已达到上限")), action: "请清理不需要的任务记录或素材后重试", fromCode: true, retryable: false };

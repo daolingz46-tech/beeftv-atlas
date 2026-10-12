@@ -35,6 +35,8 @@ const (
 	VideoConfigRequiredMessage                         = "视频任务缺少可执行的模型配置"
 	CancelChangedMessage                               = "任务状态已变化，请刷新后重试"
 	LocalStorageFailedReason        kernel.ErrorReason = "local_storage_failed"
+	TaskScopeUnavailableReason      kernel.ErrorReason = "task_scope_unavailable"
+	TaskScopeArchivedReason         kernel.ErrorReason = "task_scope_archived"
 )
 
 func unavailable() error {
@@ -88,10 +90,14 @@ func mapPersistError(err error, req CreateRequest, present Presenter, limit int)
 
 func mapTaskScopeError(err error) error {
 	if errors.Is(err, repository.ErrTaskScopeArchived) {
-		return kernel.BadAuthRequest(TaskScopeArchivedMessage)
+		failure := kernel.BadAuthRequest(TaskScopeArchivedMessage)
+		failure.Reason = TaskScopeArchivedReason
+		return failure
 	}
 	if errors.Is(err, repository.ErrTaskScopeNotActive) {
-		return kernel.BadAuthRequest(TaskScopeUnavailableMessage)
+		failure := kernel.BadAuthRequest(TaskScopeUnavailableMessage)
+		failure.Reason = TaskScopeUnavailableReason
+		return failure
 	}
 	return nil
 }
