@@ -1,4 +1,5 @@
-import { Button, Image as AntImage, InputNumber, Modal, Popover } from "antd";
+import { Button, Image as AntImage, InputNumber, Popover } from "antd";
+import { AppModal } from "@/components/ui/product/app-modal";
 import { Tooltip } from "@/components/ui/base/tooltip";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { ArrowLeftRight, ArrowUp, AtSign, Boxes, Camera, ChevronDown, FileText, GripVertical, ImageIcon, ImagePlus, Link2, LoaderCircle, Maximize2, Music2, Pencil, SlidersHorizontal, UserRound, Video, WandSparkles, X } from "lucide-react";
@@ -69,7 +70,7 @@ const PROMPT_EDITOR_MAX_LINES = 8;
 const PROMPT_EDITOR_EXPANDED_MAX_LINES = 14;
 const PROMPT_EDITOR_MODAL_WIDTH = "min(1200px, 92vw)";
 const PROMPT_EDITOR_MODAL_DEFAULT_WIDTH = 1200;
-const PROMPT_EDITOR_MODAL_DEFAULT_HEIGHT = 420;
+const PROMPT_EDITOR_MODAL_DEFAULT_HEIGHT = 640;
 
 export function CanvasNodePromptPanel({ projectId, addedSkills, node, isRunning, onPromptChange, onConfigChange, onGenerate, mentionReferences = [], onAddReference, onRemoveReference, onReorderReferences, onReplaceReference, onReplaceReferenceFiles, onClose, onNodeMouseDown, onImageSettingsOpenChange, workspaceMode = "professional" }: CanvasNodePromptPanelProps) {
     const globalConfig = useEffectiveConfig();
@@ -168,8 +169,7 @@ export function CanvasNodePromptPanel({ projectId, addedSkills, node, isRunning,
         return { width: Math.round(rect.width), height: Math.round(rect.height) };
     };
     const isSubmitDisabled = !isRunning && !prompt.trim();
-    const canExpandPrompt = mode === "image" || mode === "video";
-    const canOptimizePrompt = Boolean(promptOptimizerProvider) && canExpandPrompt;
+    const canOptimizePrompt = Boolean(promptOptimizerProvider) && (mode === "image" || mode === "video");
     const isPortraitTexture = mode === "image" && Boolean(node.metadata?.portraitTexture);
     const autoMentionedPrompt = useMemo(() => autoMentionCanvasResourceReferences(prompt, resolvedMentionReferences), [prompt, resolvedMentionReferences]);
     const canAutoMention = autoMentionedPrompt !== prompt;
@@ -280,18 +280,6 @@ export function CanvasNodePromptPanel({ projectId, addedSkills, node, isRunning,
                     </button>
                 </Tooltip>
             ) : null}
-                {!expanded && canExpandPrompt ? (
-                    <Tooltip title="放大编辑">
-                        <button
-                            type="button"
-                            className="canvas-node-composer-header-action grid size-6 shrink-0 place-items-center rounded-md"
-                            onClick={() => setExpandedPromptOpen(true)}
-                            aria-label="放大编辑提示词"
-                        >
-                            <Maximize2 className="size-3" />
-                        </button>
-                    </Tooltip>
-                ) : null}
                 {!expanded && onClose ? (
                     <Tooltip title="关闭">
                         <button
@@ -458,7 +446,23 @@ export function CanvasNodePromptPanel({ projectId, addedSkills, node, isRunning,
         const height = expanded ? expandedComposerHeight : composerHeight;
         return (
             <>
-                <div className={fill ? "canvas-node-composer-editor flex-1" : "canvas-node-composer-editor"} style={fill ? { minHeight: bounds.min } : { height, ...(expanded ? { flexShrink: 0 } : null) }}>
+                <div className={`canvas-node-composer-editor${fill ? " flex-1" : ""}${expanded ? "" : " canvas-node-composer-editor--compact"}`} style={fill ? { minHeight: bounds.min } : { height, ...(expanded ? { flexShrink: 0 } : null) }}>
+                    {!expanded ? (
+                        <Tooltip title="放大查看和编辑全文">
+                            <button
+                                type="button"
+                                className="canvas-node-composer-header-action canvas-node-composer-expand"
+                                aria-label="放大编辑提示词"
+                                aria-expanded={expandedPromptOpen}
+                                onClick={() => {
+                                    setExpandedModalSize((size) => size ?? clampExpandedModalSize({ width: PROMPT_EDITOR_MODAL_DEFAULT_WIDTH, height: PROMPT_EDITOR_MODAL_DEFAULT_HEIGHT }));
+                                    setExpandedPromptOpen(true);
+                                }}
+                            >
+                                <Maximize2 className="size-3.5" />
+                            </button>
+                        </Tooltip>
+                    ) : null}
                     <ConnectedReferenceShelf
                         targetNodeId={node.id}
                         references={resolvedMentionReferences}
@@ -569,7 +573,7 @@ export function CanvasNodePromptPanel({ projectId, addedSkills, node, isRunning,
 
             {renderComposerControls(false)}
 
-            <Modal
+            <AppModal
                 className="canvas-prompt-editor-modal"
                 open={expandedPromptOpen}
                 title={null}
@@ -578,13 +582,14 @@ export function CanvasNodePromptPanel({ projectId, addedSkills, node, isRunning,
                 width={expandedModalSize ? expandedModalSize.width : PROMPT_EDITOR_MODAL_WIDTH}
                 style={{ maxWidth: `calc(100vw - ${PROMPT_EDITOR_VIEWPORT_MARGIN}px)` }}
                 destroyOnHidden
+                flush
                 onCancel={() => {
                     setExpandedPresetOpen(false);
                     setExpandedPromptOpen(false);
                 }}
                 styles={{
-                    container: { border: 0, borderRadius: "var(--canvas-composer-radius)", padding: 0, overflow: "hidden", background: theme.node.panel, boxShadow: theme.node.shadow },
-                    body: { minHeight: 0, padding: 0 },
+                    container: { border: 0, borderRadius: "var(--canvas-composer-radius)", background: theme.node.panel, boxShadow: theme.node.shadow },
+                    body: { minHeight: 0 },
                 }}
             >
                 <div ref={expandedModalRef} className="relative flex min-h-0 flex-col" style={{ ...composerTokens, color: theme.node.text, maxHeight: `calc(100dvh - ${PROMPT_EDITOR_VIEWPORT_MARGIN}px)`, ...(expandedModalSize ? { height: expandedModalSize.height } : null) }}>
@@ -600,7 +605,7 @@ export function CanvasNodePromptPanel({ projectId, addedSkills, node, isRunning,
                     </div>
                     <PromptModalResizeHandle size={expandedModalSize} measure={measureExpandedModalSize} onResize={setExpandedModalSize} accent={theme.node.muted} />
                 </div>
-            </Modal>
+            </AppModal>
 
             </div>
         </CanvasPromptOptimizerDrawer>

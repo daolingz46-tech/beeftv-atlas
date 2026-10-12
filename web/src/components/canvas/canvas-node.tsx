@@ -437,6 +437,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                         node={data}
                         theme={theme}
                         isEditingContent={isEditingContent}
+                        isSelected={isSelected}
                         textareaRef={textareaRef}
                         isBatchRoot={isBatchRoot}
                         batchCount={batchCount}

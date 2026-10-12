@@ -1065,6 +1065,13 @@ function splitMentionText(value: string, references: CanvasResourceReference[]) 
 function renderEditableContent(editor: HTMLElement, value: string, references: CanvasResourceReference[]) {
     const parts = splitMentionText(value, references);
     const nodes = parts.map((part) => (part.type === "mention" ? createInlineMentionChip(part.reference, part.token) : document.createTextNode(part.text)));
+    // Chromium needs a terminal break to place the caret on an empty final
+    // line. It is a rendering sentinel, not another character in the prompt.
+    if (value.endsWith("\n")) {
+        const end = document.createElement("br");
+        end.dataset.editorTrailingBreak = "true";
+        nodes.push(end);
+    }
     editor.replaceChildren(...nodes);
 }
 
@@ -1097,6 +1104,7 @@ function serializeNodeList(nodes: NodeListOf<ChildNode> | ChildNode[]) {
 function serializeNode(node: ChildNode): string {
     if (node.nodeType === Node.TEXT_NODE) return node.textContent || "";
     if (!(node instanceof HTMLElement)) return "";
+    if (node.dataset.editorTrailingBreak) return "";
     const token = node.dataset.mentionToken;
     if (token) return token;
     if (node.tagName === "BR") return "\n";
@@ -1159,6 +1167,7 @@ function pointForOffset(root: Node, offset: number): { node: Node; offset: numbe
 function plainTextLength(node: Node): number {
     if (node.nodeType === Node.TEXT_NODE) return node.textContent?.length || 0;
     if (node instanceof HTMLElement) {
+        if (node.dataset.editorTrailingBreak) return 0;
         const token = node.dataset.mentionToken;
         if (token) return token.length;
         if (node.tagName === "BR") return 1;

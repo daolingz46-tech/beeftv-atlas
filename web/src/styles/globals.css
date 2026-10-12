@@ -10737,6 +10737,21 @@ html:not(.dark) .creation-studio-control:hover,
         background: transparent;
     }
 
+    .canvas-node-composer-editor--compact {
+        padding-right: var(--space-8);
+    }
+
+    .canvas-node-composer-expand {
+        position: absolute;
+        top: var(--space-1);
+        right: var(--space-1);
+        display: grid;
+        width: var(--space-6);
+        height: var(--space-6);
+        place-items: center;
+        border-radius: var(--r-md);
+    }
+
     .canvas-node-composer-camera-panel {
         position: absolute;
         right: var(--space-3);
