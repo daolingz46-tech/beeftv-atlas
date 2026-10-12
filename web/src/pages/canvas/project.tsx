@@ -22,6 +22,7 @@ import { canOpenCanvasNodePromptPanel, isCanvasMediaResultNode } from "@/lib/can
 import copyToClipboard from "copy-to-clipboard";
 import { canvasMediaFileExtension } from "@/lib/canvas/canvas-media-download";
 import { copyOwnedMediaToClipboard, copyOwnedMediaFilesToClipboard } from "@/services/desktop-media-save";
+import { armDesktopNodeDrag } from "@/services/desktop-node-drag";
 import { nanoid } from "nanoid";
 import { canvasAppearanceBaseTheme, canvasAppearanceForTheme, DEFAULT_CANVAS_BACKGROUND_MODE, normalizeCanvasAppearance, resolveCanvasAppearance, writeCanvasAppearanceDefault, type CanvasAppearance } from "@/lib/canvas/canvas-appearance";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
@@ -1490,6 +1491,9 @@ function InfiniteCanvasPage() {
         [bringNodeToFront, nodesRef],
     );
 
+    const handleNodeFileDrag = useCallback((selectedNodes: CanvasNodeData[], onTakeOver: () => void) =>
+        armDesktopNodeDrag(selectedNodes, onTakeOver, text => message.error(text)), [message]);
+
     const { alignmentGuides, cancelSelectionBox, deselectCanvas, dragPreview, frameDropTargetId, handleCanvasMouseDown, handleNodeMouseDown, isNodeDragging, nodeDraggingRef, selectionBoundsElementRef, selectionBox } = useCanvasSelectionController({
         containerRef,
         nodesRef,
@@ -1507,6 +1511,7 @@ function InfiniteCanvasPage() {
         onNodeClick: handleSelectedNodeClick,
         onNodeDragEnd: handleNodeDragEnd,
         onDuplicateDrag: duplicateNodesAtOffset,
+        onNodeFileDrag: handleNodeFileDrag,
         onBatchConnectionTarget: handleBatchConnectionTargetClick,
         onLinkedFolderDrop: archiveNodesToLinkedFolder,
         onDeselect: handleCanvasDeselect,

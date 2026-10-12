@@ -24,6 +24,7 @@ type UseCanvasSelectionControllerOptions = {
     onNodeClick: (node: CanvasNodeData) => void;
     onNodeDragEnd?: (nodeId: string) => void;
     onDuplicateDrag?: (nodeIds: Set<string>, offset: Position) => void;
+    onNodeFileDrag?: (nodes: CanvasNodeData[], onTakeOver: () => void) => (() => void) | undefined;
     onBatchConnectionTarget?: (event: ReactMouseEvent | ReactPointerEvent, nodeId: string) => boolean;
     onLinkedFolderDrop?: (folder: CanvasNodeData, nodes: CanvasNodeData[]) => void;
     onDeselect: () => void;
@@ -84,6 +85,7 @@ export function useCanvasSelectionController({
     onNodeClick,
     onNodeDragEnd,
     onDuplicateDrag,
+    onNodeFileDrag,
     onBatchConnectionTarget,
     onLinkedFolderDrop,
     onDeselect,
@@ -102,6 +104,9 @@ export function useCanvasSelectionController({
     const nodeDraggingRef = useRef(false);
     const dragRef = useRef<DragState>({ ...EMPTY_DRAG_STATE });
     const copyPreviewRef = useRef<ReturnType<typeof createCanvasNodeCopyPreview> | null>(null);
+    const cancelFileDragRef = useRef<(() => void) | undefined>(undefined);
+    const cancelNodeDragRef = useRef<() => void>(() => {});
+    const fileDragGenerationRef = useRef(0);
     const frameDropIndexRef = useRef(buildCanvasFrameDropIndex([]));
     const draggedNodesRef = useRef<CanvasNodeData[]>([]);
     const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
@@ -227,16 +232,29 @@ export function useCanvasSelectionController({
         setAlignmentGuides({});
         setDragPreview(duplicate ? null : { x: 0, y: 0, nodeIds: draggedRenderNodeIdSet });
         if (!duplicate) applyCanvasNodeDragPreview(containerRef.current, { x: 0, y: 0, nodeIds: draggedRenderNodeIdSet });
-    }, [containerRef, historyPausedRef, nodesRef, onBatchConnectionTarget, onDuplicateDrag, onNodeBringToFront, onNodeClick, onNodeInteractionStart, selectedNodeIdsRef, setSelectedConnectionId, setSelectedNodeIds]);
+        // Alt remains canvas duplication; direct dragging can cross into a
+        // native file copy without committing the temporary canvas positions.
+        const fileDragGeneration = ++fileDragGenerationRef.current;
+        if (!duplicate) cancelFileDragRef.current = onNodeFileDrag?.(draggedNodesRef.current, () => {
+            if (fileDragGenerationRef.current === fileDragGeneration) cancelNodeDragRef.current();
+        });
+    }, [containerRef, historyPausedRef, nodesRef, onBatchConnectionTarget, onDuplicateDrag, onNodeFileDrag, onNodeBringToFront, onNodeClick, onNodeInteractionStart, selectedNodeIdsRef, setSelectedConnectionId, setSelectedNodeIds]);
 
-    const finishNodeDrag = useCallback((clientX?: number, clientY?: number) => {
+    const finishNodeDrag = useCallback((clientX?: number, clientY?: number, cancelled = false) => {
         if (dragFrameRef.current) {
             cancelAnimationFrame(dragFrameRef.current);
             dragFrameRef.current = null;
         }
         if (!dragRef.current.isDraggingNode) return;
+        fileDragGenerationRef.current++;
+        // A quick release can beat native polling. Do not persist an off-window
+        // move when the user intended to export the node.
+        cancelled ||= Boolean(cancelFileDragRef.current) && clientX != null && clientY != null &&
+            (clientX < 0 || clientY < 0 || clientX >= window.innerWidth || clientY >= window.innerHeight);
         const shouldOpenPanelOnClick = dragRef.current.openPanelOnClick;
-        const wasClick = shouldOpenPanelOnClick && !dragRef.current.hasMoved && dragRef.current.draggedNodeIds.length === 1;
+        cancelFileDragRef.current?.();
+        cancelFileDragRef.current = undefined;
+        const wasClick = !cancelled && shouldOpenPanelOnClick && !dragRef.current.hasMoved && dragRef.current.draggedNodeIds.length === 1;
         const clickedNodeId = dragRef.current.draggedNodeIds[0];
         const currentViewport = viewportRef.current;
         const rawOffset = { x: clientX == null ? 0 : (clientX - dragRef.current.startX) / currentViewport.k, y: clientY == null ? 0 : (clientY - dragRef.current.startY) / currentViewport.k };
@@ -256,9 +274,9 @@ export function useCanvasSelectionController({
         setAlignmentGuides({});
         copyPreviewRef.current?.dispose();
         copyPreviewRef.current = null;
-        if (dragRef.current.duplicate) {
+        if (!cancelled && dragRef.current.duplicate) {
             if (dragRef.current.hasMoved && clientX != null && clientY != null) onDuplicateDrag?.(new Set(dragRef.current.draggedNodeIds), { x: dx, y: dy });
-        } else if (dragRef.current.hasMoved) {
+        } else if (!cancelled && dragRef.current.hasMoved) {
             const draggedNodeIds = new Set(dragRef.current.draggedNodeIds);
             const positioned = clientX == null || clientY == null ? nodesRef.current : nodesRef.current.map((node) => {
                 const initial = initialById.get(node.id);
@@ -281,6 +299,7 @@ export function useCanvasSelectionController({
             if (clickedNode) onNodeClick(clickedNode);
         }
     }, [containerRef, historyPausedRef, nodesRef, onDuplicateDrag, onLinkedFolderDrop, onNodeClick, onNodeDragEnd, setNodes, snapToGrid, viewportRef]);
+    cancelNodeDragRef.current = () => finishNodeDrag(undefined, undefined, true);
 
     const handleNodeDragMove = useCallback((event: MouseEvent | PointerEvent) => {
         if (!dragRef.current.isDraggingNode) return;
@@ -389,7 +408,7 @@ export function useCanvasSelectionController({
             gestureHandlersRef.current.finishSelection(event.clientX, event.clientY);
         };
         const cancel = () => {
-            gestureHandlersRef.current.finishNodeDrag();
+            gestureHandlersRef.current.finishNodeDrag(undefined, undefined, true);
             gestureHandlersRef.current.cancelSelectionBox();
         };
         const onMouseMove = (event: MouseEvent) => gestureHandlersRef.current.handleNodeDragMove(event);
@@ -401,6 +420,7 @@ export function useCanvasSelectionController({
         window.addEventListener("pointercancel", cancel);
         window.addEventListener("blur", cancel);
         return () => {
+            cancelFileDragRef.current?.();
             if (dragFrameRef.current) cancelAnimationFrame(dragFrameRef.current);
             if (selectionFrameRef.current) cancelAnimationFrame(selectionFrameRef.current);
             copyPreviewRef.current?.dispose();
