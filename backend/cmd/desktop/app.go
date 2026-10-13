@@ -30,8 +30,6 @@ type DesktopApp struct {
 	wailsCtx       context.Context
 	chooseSavePath func(ctx context.Context, fileName string) (string, error)
 	copyOwnedMedia func(resourceID, destPath string) error
-	fileDragMu     sync.Mutex
-	fileDrag       *nodeFileDragSession
 }
 
 // Wails reflects every field type reachable from a bound object. Keeping the
@@ -243,11 +241,6 @@ func (a *DesktopApp) startup(ctx context.Context) {
 }
 
 func (a *DesktopApp) shutdown(_ context.Context) {
-	a.fileDragMu.Lock()
-	if a.fileDrag != nil {
-		a.fileDrag.cancel()
-	}
-	a.fileDragMu.Unlock()
 	a.mu.Lock()
 	a.wailsCtx = nil
 	a.mu.Unlock()
