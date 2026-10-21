@@ -219,7 +219,7 @@ function LoadingContent({ node, theme, onOpenTaskDetails, onCancelTask }: Pick<C
     return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-2.5 px-5 text-center" style={{ color: theme.node.activeStroke }}>
             {submissionUncertain ? <AlertCircle className="size-10" /> : <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />}
-            <span className="text-[var(--fs-tiny)] font-semibold">生成中</span>
+            <span className="text-[var(--fs-tiny)] font-semibold">{submissionUncertain ? "提交结果待确认" : displayTask.stage === "正在连接上游" ? "正在提交，等待上游回执" : "生成中"}</span>
             {hasTaskIdentity ? (
                 <div className="flex w-full max-w-[210px] flex-col items-center gap-1.5">
                     <div className="max-w-full truncate text-sm font-semibold tabular-nums" style={{ color: theme.node.text }}>

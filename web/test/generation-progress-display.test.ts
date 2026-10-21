@@ -42,9 +42,15 @@ describe("generation progress display", () => {
         expect(view.bar).toBe("indeterminate");
     });
 
-    test("no real percentage means no bar and no invented number", () => {
+    test("an active task without a percentage shows activity without inventing a number", () => {
         const view = generationProgressDisplay({ status: "running", progress: null, now: start, isVideo: true });
-        expect(view).toEqual({ bar: "none", percent: null, expectation: GENERATION_VIDEO_EXPECTATION });
+        expect(view).toEqual({ bar: "indeterminate", percent: null, expectation: GENERATION_VIDEO_EXPECTATION });
+    });
+
+    test("a stopped task without progress must not appear to be running", () => {
+        for (const status of ["failed", "cancelled", "succeeded"] as const) {
+            expect(generationProgressDisplay({ status, progress: null, now: start, isVideo: true }).bar).toBe("none");
+        }
     });
 
     test("terminal states are unaffected by the stall rule and show no expectation", () => {

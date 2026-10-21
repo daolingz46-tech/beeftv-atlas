@@ -20,7 +20,7 @@ export function generationTaskStatusLabel(task: GenerationTaskDisplayTarget) {
 }
 
 export function generationTaskStageLabel(task: GenerationTaskDisplayTarget) {
-    if (isGenerationTaskSubmissionUncertain(task)) return "为避免重复创建上游任务，未自动重试";
+    if (isGenerationTaskSubmissionUncertain(task)) return "未收到上游任务回执，需核对供应商记录；不会重复提交";
     if (task.stage === "generating") return "生成中";
     if (task.stage === "queued") return "排队中";
     return task.stage || generationTaskStatusLabel(task);
@@ -68,7 +68,7 @@ export function generationProgressDisplay(input: {
 }): GenerationProgressDisplay {
     const active = input.status === "queued" || input.status === "running";
     const expectation = active && input.isVideo ? GENERATION_VIDEO_EXPECTATION : null;
-    if (input.progress === null) return { bar: "none", percent: null, expectation };
+    if (input.progress === null) return { bar: active ? "indeterminate" : "none", percent: null, expectation };
     const stalled = input.status === "running"
         && input.progressChangedAt !== undefined
         && input.now - input.progressChangedAt >= GENERATION_PROGRESS_STALL_MS;

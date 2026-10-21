@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"infinite-canvas/backend/internal/model"
+	"infinite-canvas/backend/internal/protocol"
 	"infinite-canvas/backend/internal/taskruntime"
 )
 
@@ -333,7 +334,33 @@ func (s *Service) shouldDeferVideoProviderTask(task model.Task, decryptedInput s
 		return false
 	}
 	resolved, resolveErr := s.resolveProviderConfig(input.Config)
-	return resolveErr == nil && (resolved.InterfaceType == string(model.ChannelInterfaceNewAPIChannel2) || isBeefAPIVideoConfig(context.Background(), resolved))
+	if resolveErr != nil {
+		return false
+	}
+	ctx := withProtocolRegistry(context.Background(), s.protocolRegistry())
+	ctx = ensureOfficialProtocolAdapter(ctx, resolved.InterfaceType)
+	if resolved.InterfaceType == string(model.ChannelInterfaceNewAPIChannel2) || isBeefAPIVideoConfig(ctx, resolved) {
+		return true
+	}
+	// Installed Atlas adapters also resume by ID, bypassing create entirely.
+	// Require a concrete read-only poll request, not merely a video capability.
+	input.Config = resolved
+	return resumableDeclarativeVideo(ctx, input, providerRequestID)
+}
+
+func resumableDeclarativeVideo(ctx context.Context, input canvasGenerationInput, taskID string) bool {
+	if strings.TrimSpace(taskID) == "" {
+		return false
+	}
+	adapter, ok := declarativeProtocolAdapterForContext(ctx, input.Config.InterfaceType)
+	if !ok {
+		return false
+	}
+	spec, err := adapter.BuildPoll(ctx, protocol.PollContext{
+		BaseURL: input.Config.BaseURL, Model: input.Config.Model,
+		Request: protocolRequestFromInput(input), TaskID: taskID,
+	})
+	return err == nil && strings.EqualFold(spec.Method, "GET")
 }
 
 func newAPIChannel2TaskSyncExpired(task model.Task, err error, now time.Time) bool {

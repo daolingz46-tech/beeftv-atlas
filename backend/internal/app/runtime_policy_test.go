@@ -45,7 +45,7 @@ func TestProviderPollingDeadlineDefaultsToOneHour(t *testing.T) {
 	}
 }
 
-func TestOnlyResumableNewAPIChannel2VideoDeadlinesStayRunning(t *testing.T) {
+func TestResumableVideoDeadlinesStayRunning(t *testing.T) {
 	svc := &Service{}
 	input, err := json.Marshal(canvasGenerationInput{Mode: "video", Config: providerConfig{BaseURL: "https://example.com", InterfaceType: string(model.ChannelInterfaceNewAPIChannel2)}})
 	if err != nil {
@@ -87,8 +87,12 @@ func TestOnlyResumableNewAPIChannel2VideoDeadlinesStayRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if svc.shouldDeferVideoProviderTask(base, string(other), context.DeadlineExceeded) {
-		t.Fatal("providers without a verified query-only resume contract must fail closed")
+	if !svc.shouldDeferVideoProviderTask(base, string(other), context.DeadlineExceeded) {
+		t.Fatal("installed declarative GET poll adapters must also resume by the original ID")
+	}
+	missing, _ := json.Marshal(canvasGenerationInput{Mode: "video", Config: providerConfig{BaseURL: "https://example.com", InterfaceType: "missing-adapter"}})
+	if svc.shouldDeferVideoProviderTask(base, string(missing), context.DeadlineExceeded) {
+		t.Fatal("providers without an installed query-only adapter must fail closed")
 	}
 }
 
