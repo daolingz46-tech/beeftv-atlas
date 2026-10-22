@@ -31,7 +31,7 @@ export function CanvasImageSettingsPopover({ config, onConfigChange, onOpenChang
     const profile = modelCapabilityConfigFor(config, config.model || config.imageModel).image!;
     const normalized = normalizeImageValue(profile, config);
     const summaryParts = [
-        ...(profile.size.parameter !== "none" ? [imageSizeLabel(normalized.size)] : []),
+        ...(profile.size.parameter !== "none" ? [imageSizeLabel(normalized.size, profile)] : []),
         ...(profile.resolution?.supported ? [normalized.imageResolution?.toUpperCase()] : []),
         ...(profile.quality.supported ? [imageQualityLabel(normalized.quality)] : []),
         ...(showCount && profile.maxOutputs > 1 ? [`${normalized.count} 张`] : []),

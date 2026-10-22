@@ -10,7 +10,7 @@ import { isGenerationTaskSubmissionUncertain } from "@/lib/generation-task-displ
 import { canvasNodeOperation } from "@/lib/operation-progress";
 import { useOperationProgress } from "@/stores/use-operation-progress";
 import { canvasRichTextHTML } from "@/lib/canvas/canvas-rich-text";
-import { fitNodeSize } from "@/lib/canvas/canvas-node-size";
+import { fitImageNodeToDecodedSize, fitNodeSize } from "@/lib/canvas/canvas-node-size";
 import { loadCanvasDrawingPreview } from "@/lib/canvas/canvas-drawing-storage";
 import { canvasNodeVideoPreviewUrl, inferVideoHasAudio } from "@/lib/canvas/canvas-media-preview";
 import { bindCanvasVideoHoverPreview } from "@/lib/canvas/canvas-video-hover-preview";
@@ -26,6 +26,7 @@ import { resolveMediaUrl } from "@/services/file-storage";
 import { useResourceVideoPlayback } from "@/hooks/use-resource-video-playback";
 import { resolveImageUrl } from "@/services/image-storage";
 import { recordDiagnosticEvent } from "@/services/diagnostics/client-diagnostics";
+import { canvasNodeDiagnosticContext, recordCanvasVideoDiagnostic } from "@/services/diagnostics/canvas-media-diagnostics";
 import { acquireCanvasVideoPreview, canvasDerivedPreviewSourceKey, canvasVideoPreviewNeedsHydration } from "@/services/canvas-video-preview";
 import { acquireCanvasVideoSource } from "@/services/canvas-video-source";
 import { getActiveUserScopeEpoch, subscribeUserScope } from "@/lib/user-scope";
@@ -48,6 +49,7 @@ import { PanoramaNodeContent } from "./nodes/panorama-node";
 import { SvgNodeContent } from "./nodes/svg-node";
 import { ArtCritiqueNodeContent } from "./nodes/ai-art-critique-node";
 import { MediaConversionNodeContent } from "./nodes/media-conversion-node";
+import { UpscaleNodeContent } from "./nodes/upscale-node";
 import { MEDIA_CONVERSION_NODE_TYPE } from "@/lib/media-conversion/contracts";
 
 export type CanvasNodeContentProps = {
@@ -81,9 +83,12 @@ export type CanvasNodeContentProps = {
 
 export function CanvasNodeContent(props: CanvasNodeContentProps) {
     const operation = useOperationProgress(state => canvasNodeOperation(state.entries, props.projectId, props.node.id, props.node.metadata?.taskId));
+    if (props.node.type === CanvasNodeType.Upscale) return <UpscaleNodeContent node={props.node} theme={props.theme} />;
     if (props.node.metadata?.fileUpload) return <CanvasFileUploadContent node={props.node} theme={props.theme} reduceMotion={props.reduceMediaEffects} />;
     if (operation) return <CanvasNodeGenerationProgress node={props.node} theme={props.theme} operation={operation} onOpenTaskDetails={props.onOpenTaskDetails} onCancelTask={props.onCancelTask} />;
     const hasCustomContent = props.node.type === CanvasNodeType.Config
+        || Boolean(props.node.metadata?.reusableWorkflow)
+        || Boolean(props.node.metadata?.workflowSlot)
         || props.node.type === CanvasNodeType.Script
         || props.node.type === CanvasNodeType.BatchTable
         || props.node.type === CanvasNodeType.Director
@@ -198,7 +203,9 @@ function DrawingContent({ node, theme, drawingProjectId }: CanvasNodeContentProp
 
 function ErrorContent({ node, theme, onRetry, onReloadResource, onOpenTaskDetails }: Pick<CanvasNodeContentProps, "node" | "theme" | "onRetry" | "onReloadResource" | "onOpenTaskDetails">) {
     const explanation = canvasNodeFailureExplanation(node);
+    const batchChild = Boolean(node.metadata?.batchRootId);
     const localDepthAction = canRecoverOrRetryDepthCapture(node);
+    const upscaleAction = Boolean(node.metadata?.workflowOperation?.id.endsWith(".ai-upscale"));
     const errorDisplayTask = {
         provider: node.metadata?.taskProvider,
         status: (node.metadata?.taskStatus || "failed") as GenerationTask["status"],
@@ -223,11 +230,12 @@ function ErrorContent({ node, theme, onRetry, onReloadResource, onOpenTaskDetail
             <div className="w-full" style={{ color: submissionUncertain ? theme.node.text : theme.accent.danger }}>
                 <GenerationFailureNotice
                     compact
+                    summaryOnly={batchChild}
                     explanation={explanation}
-                    context={{ taskId: node.metadata?.taskId, model: node.metadata?.model, createdAt: node.metadata?.taskCreatedAt, stage: node.metadata?.taskStage, providerRequestId: node.metadata?.taskProviderRequestId, failureDiagnostics: node.metadata?.taskFailureDiagnostics, errorSummary: node.metadata?.generationErrorSummary, completedAt: node.metadata?.taskCompletedAt, updatedAt: node.metadata?.taskUpdatedAt }}
+                    context={{ ...canvasNodeDiagnosticContext(node), model: node.metadata?.model, createdAt: node.metadata?.taskCreatedAt, stage: node.metadata?.taskStage, providerRequestId: node.metadata?.taskProviderRequestId, failureDiagnostics: node.metadata?.taskFailureDiagnostics, errorSummary: node.metadata?.generationErrorSummary, completedAt: node.metadata?.taskCompletedAt, updatedAt: node.metadata?.taskUpdatedAt }}
                     onOpenDetails={node.metadata?.taskId && onOpenTaskDetails ? () => onOpenTaskDetails(node) : undefined}
                     onRetry={!localDepthAction && (submissionUncertain || explanation.uncertain || explanation.category === "download_failed") ? undefined : onRetry ? () => onRetry(node) : undefined}
-                    retryLabel={explanation.category === "result_target_unavailable" ? "生成历史" : localDepthAction && node.metadata?.taskStatus === "succeeded" ? "恢复结果" : node.metadata?.isBatchRoot ? "重新生成失败项" : "重新生成"}
+                    retryLabel={upscaleAction ? node.metadata?.taskId ? "取回原结果" : "重试未提交项" : explanation.category === "result_target_unavailable" ? "生成历史" : localDepthAction && node.metadata?.taskStatus === "succeeded" ? "恢复结果" : node.metadata?.isBatchRoot ? "重新生成失败项" : "重新生成"}
                 />
             </div>
             {node.metadata?.resourceReloadAvailable ? (
@@ -358,7 +366,7 @@ function ImageNodeContent(props: CanvasNodeContentProps) {
         const content = props.node.metadata?.status === "loading"
             ? <CanvasNodeGenerationProgress node={props.node} theme={props.theme} />
             : props.node.metadata?.status === "error"
-                ? <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} onReloadResource={props.onReloadResource} />
+                ? <div className="flex h-full w-full items-center justify-center overflow-hidden"><ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} onReloadResource={props.onReloadResource} onOpenTaskDetails={props.onOpenTaskDetails} /></div>
                 : <EmptyImageContent {...props} isBatchRoot={false} />;
         return <BatchFrame batchPreviewNodes={props.batchPreviewNodes} batchCount={props.batchCount} batchExpanded={props.batchExpanded} batchOpening={props.batchOpening} batchRecovering={props.batchRecovering} theme={props.theme} onToggleBatch={props.onToggleBatch}>{content}</BatchFrame>;
     }
@@ -403,11 +411,24 @@ function VideoNodeContent({ node, theme, mediaActive = false, onMediaPlayRequest
     }, [mediaActive, url]);
 
     useEffect(() => {
+        if (!mediaActive || !url) return;
+        recordCanvasVideoDiagnostic(node, "load_requested");
+        const timer = window.setTimeout(() => {
+            const video = playerBoxRef.current?.querySelector("video");
+            if (!video || video.readyState < 2) recordCanvasVideoDiagnostic(node, "load_stalled", video);
+        }, 10_000);
+        return () => window.clearTimeout(timer);
+    }, [mediaActive, url, retryEpoch, node.id]);
+
+    useEffect(() => { if (mediaActive && error) recordCanvasVideoDiagnostic(node, "source_failed"); }, [mediaActive, error, node.id]);
+
+    useEffect(() => {
         const box = playerBoxRef.current;
         const video = box?.querySelector("video");
         if (!video) return;
         const handleLoadedMetadata = () => {
             if (video.videoWidth <= 0 || video.videoHeight <= 0) return;
+            recordCanvasVideoDiagnostic(node, "metadata_loaded", video);
             setVideoSize({ width: video.videoWidth, height: video.videoHeight });
             if (!compatible && (node.metadata?.naturalWidth !== video.videoWidth || node.metadata?.naturalHeight !== video.videoHeight)) {
                 updateMediaNode?.(node.id, (current) => ({ ...current, metadata: { ...current.metadata, naturalWidth: video.videoWidth, naturalHeight: video.videoHeight } }));
@@ -436,7 +457,7 @@ function VideoNodeContent({ node, theme, mediaActive = false, onMediaPlayRequest
     return (
         <div ref={playerBoxRef} className="relative flex h-full w-full items-center justify-center overflow-hidden rounded-[var(--node-radius)] bg-black" onErrorCapture={(event) => {
             // A failed <source> does not bubble a video error to Vidstack.
-            if (event.target instanceof HTMLSourceElement && !requestCompatible()) setPlaybackError(true);
+            if (event.target instanceof HTMLSourceElement) { recordCanvasVideoDiagnostic(node, "playback_failed", playerBoxRef.current?.querySelector("video")); if (!requestCompatible()) setPlaybackError(true); }
         }}>
             {node.metadata?.outputParameterWarning ? <div role="status" className="absolute left-2 right-2 top-2 z-[var(--node-z-overlay)] rounded-md px-3 py-2 text-xs leading-relaxed" style={{ background: theme.node.panel, color: theme.node.text }}>{node.metadata.outputParameterWarning}</div> : null}
             <div className={`absolute inset-0 ${presentation.showPoster ? "opacity-100" : "opacity-0"}`}>
@@ -447,7 +468,7 @@ function VideoNodeContent({ node, theme, mediaActive = false, onMediaPlayRequest
             {playbackError ? <div role="status" className="absolute inset-0 z-[var(--node-z-overlay)] grid place-items-center bg-black/80 px-4 text-center text-xs text-white/80">视频已导入，当前无法播放预览。原文件仍可下载和使用。</div> : null}
             {mediaActive && url ? (
                 <div className={`absolute ${presentation.showVideo ? "opacity-100" : "pointer-events-none opacity-0"}`} style={{ width: fitWidth, height: Math.round(fitHeight) }}>
-                    <VideoPlayer key={retryEpoch} src={url} mimeType={compatible ? "video/mp4" : node.metadata?.mimeType} title={node.title || "视频"} hasAudio={inferVideoHasAudio(node.metadata)} autoPlay preload="metadata" brandColor={theme.accent.primary} className="h-full w-full rounded-[var(--node-radius)] bg-black" dataCanvasNoZoom compactControls onFirstFramePresented={() => setFirstFramePresented(true)} onError={() => { if (!requestCompatible()) setPlaybackError(true); }} onPlay={() => scheduleResourceBlobCache(node.metadata?.storageKey || "")} />
+                    <VideoPlayer key={retryEpoch} src={url} mimeType={compatible ? "video/mp4" : node.metadata?.mimeType} title={node.title || "视频"} hasAudio={inferVideoHasAudio(node.metadata)} autoPlay preload="metadata" brandColor={theme.accent.primary} className="h-full w-full rounded-[var(--node-radius)] bg-black" dataCanvasNoZoom compactControls onFirstFramePresented={() => { setFirstFramePresented(true); recordCanvasVideoDiagnostic(node, "first_frame", playerBoxRef.current?.querySelector("video")); }} onError={() => { recordCanvasVideoDiagnostic(node, "playback_failed", playerBoxRef.current?.querySelector("video")); if (!requestCompatible()) setPlaybackError(true); }} onPlay={() => scheduleResourceBlobCache(node.metadata?.storageKey || "")} />
                     {activeEntry && activeEntry.text.trim() ? <CanvasSubtitleOverlay text={activeEntry.text} highlight={activeHighlight} style={subtitleStyle} /> : null}
                 </div>
             ) : null}
@@ -619,21 +640,7 @@ function ImageContent({ node, theme, scale = 1, isBatchRoot, batchCount, batchPr
         if (!naturalWidth || !naturalHeight) return;
         if (measuredSizeRef.current?.width === naturalWidth && measuredSizeRef.current.height === naturalHeight) return;
         measuredSizeRef.current = { width: naturalWidth, height: naturalHeight };
-        updateMediaNode?.(node.id, (current) => {
-            const metadata = current.metadata;
-            const needsMetadata = metadata?.naturalWidth !== naturalWidth || metadata?.naturalHeight !== naturalHeight;
-            if (current.metadata?.freeResize || current.metadata?.manualSize) {
-                return needsMetadata ? { ...current, metadata: { ...metadata, naturalWidth, naturalHeight } } : current;
-            }
-            const size = fitNodeSize(naturalWidth, naturalHeight);
-            const needsResize = Math.abs(size.width - current.width) >= 1 || Math.abs(size.height - current.height) >= 1;
-            if (!needsMetadata && !needsResize) return current;
-            return {
-                ...current,
-                ...(needsResize ? size : {}),
-                metadata: needsMetadata ? { ...metadata, naturalWidth, naturalHeight } : metadata,
-            };
-        });
+        updateMediaNode?.(node.id, (current) => fitImageNodeToDecodedSize(current, naturalWidth, naturalHeight));
     };
 
     return (

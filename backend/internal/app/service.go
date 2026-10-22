@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -28,12 +29,15 @@ import (
 	"infinite-canvas/backend/internal/prompts"
 	"infinite-canvas/backend/internal/repository"
 	"infinite-canvas/backend/internal/skills"
+	"infinite-canvas/backend/internal/supporttrace"
 	localtask "infinite-canvas/backend/internal/task"
 	"infinite-canvas/backend/internal/taskdelivery"
 	"infinite-canvas/backend/internal/textreplay"
 )
 
 type Service struct {
+	canvasWorkflowMu         sync.Mutex
+	canvasWorkflowLoop       bool
 	repo                     *repository.Repository
 	dataDir                  string
 	mode                     serviceMode
@@ -76,6 +80,10 @@ type Service struct {
 	appearanceOnce           sync.Once
 	diagnostics              *diagnostics.Service
 	diagnosticsOnce          sync.Once
+	supportTraceOnce         sync.Once
+	supportTraceRecorder     *supporttrace.Recorder
+	supportTraceErr          error
+	supportTraceClosed       atomic.Bool
 	playback                 *playback.Service
 	playbackOnce             sync.Once
 	depthCapture             *depthcapture.Service
@@ -388,6 +396,13 @@ func (s *Service) cancelActiveTask(id string) {
 	if cancel != nil {
 		cancel()
 	}
+	s.deliveryControlMu.Lock()
+	for identity, stop := range s.deliveryCancels {
+		if strings.HasPrefix(identity, id+":") {
+			stop()
+		}
+	}
+	s.deliveryControlMu.Unlock()
 }
 
 func nodeOp(id string, nodeType string, title string, x int, y int, workflowKind string, content string) map[string]any {

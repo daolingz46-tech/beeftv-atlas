@@ -12812,6 +12812,11 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     gap: var(--space-1-half);
 }
 
+.director-workbench-property-dock,
+.director-workbench-sidebar {
+    --director-sequencer-border: var(--cn-stroke);
+}
+
 .director-actor-inspector {
     display: flex;
     flex-direction: column;
@@ -12847,12 +12852,12 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     width: 100%;
     min-height: 36px;
     border-radius: var(--r-md);
-    background: #f7f7f7;
-    color: #171717;
+    background: var(--cn-text);
+    color: var(--background);
     font-weight: 600;
 }
 
-.director-actor-path-create:hover { background: #e8e8e8; }
+.director-actor-path-create:hover { opacity: 0.9; }
 
 .director-actor-inspector > label {
     margin: var(--space-4) var(--space-4) 0;
@@ -12866,9 +12871,9 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     height: 28px;
     border: 0;
     border-radius: var(--r-md);
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--cn-fill);
     box-shadow: none;
-    color: #f7f7f7;
+    color: var(--cn-text);
     font-size: 12px;
 }
 
@@ -12892,8 +12897,8 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     gap: var(--space-1);
     padding-left: var(--space-2);
     border-radius: var(--r-md);
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.48);
+    background: var(--cn-fill);
+    color: var(--cn-muted);
     font-size: 12px;
 }
 
@@ -12903,13 +12908,13 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     height: 100%;
     flex: 0 0 22px;
     place-items: center;
-    border-left: 1px solid rgba(0, 0, 0, 0.2);
+    border-left: 1px solid var(--cn-stroke);
     border-radius: 0 var(--r-md) var(--r-md) 0;
-    color: rgba(255, 255, 255, 0.72);
-    background: rgba(255, 255, 255, 0.04);
+    color: var(--cn-muted);
+    background: var(--cn-fill);
 }
 
-.director-actor-axis-key:hover { background: rgba(255, 255, 255, 0.1); }
+.director-actor-axis-key:hover { background: color-mix(in srgb, var(--cn-text) 12%, transparent); }
 .director-actor-axis-key > span {
     width: 7px;
     height: 7px;
@@ -12925,7 +12930,7 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     border: 0;
     outline: 0;
     background: transparent;
-    color: #f7f7f7;
+    color: var(--cn-text);
     font-size: 12px;
     font-variant-numeric: tabular-nums;
     appearance: textfield;
@@ -12970,8 +12975,8 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     gap: var(--space-1);
     padding-inline: var(--space-2);
     border-radius: var(--r-md);
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.48);
+    background: var(--cn-fill);
+    color: var(--cn-muted);
     font-size: 12px;
 }
 
@@ -12981,7 +12986,7 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     border: 0;
     outline: 0;
     background: transparent;
-    color: #f7f7f7;
+    color: var(--cn-text);
     font-size: 12px;
     text-transform: uppercase;
 }
@@ -13018,7 +13023,7 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     font-size: 13px;
 }
 
-.director-inspector-section-title > span:last-child {
+.director-inspector-section-title > span:last-child:not(:only-child) {
     color: var(--workspace-accent);
 }
 
@@ -13035,8 +13040,8 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     overflow: hidden;
     border: 0;
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.08);
-    color: rgba(255, 255, 255, 0.7);
+    background: color-mix(in srgb, var(--cn-text) 8%, transparent);
+    color: var(--cn-text);
     font-size: 12px;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -13044,13 +13049,13 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
 }
 
 .director-pose-button:hover {
-    background: rgba(255, 255, 255, 0.12);
-    color: #f7f7f7;
+    background: color-mix(in srgb, var(--cn-text) 12%, transparent);
+    color: var(--cn-text);
 }
 
 .director-pose-button.is-active {
-    background: rgba(255, 255, 255, 0.14);
-    color: #f7f7f7;
+    background: color-mix(in srgb, var(--cn-text) 18%, transparent);
+    color: var(--cn-text);
 }
 
 .director-actor-inspector > .director-pose-adjust-header {
@@ -13061,7 +13066,7 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
 
 .director-pose-adjust-header > div {
     height: 28px;
-    color: #f7f7f7;
+    color: var(--cn-text);
     font-size: 13px;
 }
 
@@ -13070,7 +13075,7 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
 }
 
 .director-pose-controls h4 {
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--cn-muted);
     font-size: 13px;
     font-weight: 500;
     opacity: 1;
@@ -13081,7 +13086,7 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
 }
 
 .director-pose-controls .director-bone-axis-row > span {
-    color: rgba(255, 255, 255, 0.45);
+    color: var(--cn-muted);
     font-size: 13px;
     font-weight: 400;
     opacity: 1;
@@ -13089,17 +13094,17 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
 
 .director-pose-controls .ant-slider-rail {
     height: 4px;
-    background: rgba(255, 255, 255, 0.22);
+    background: color-mix(in srgb, var(--cn-text) 25%, transparent);
 }
 
 .director-pose-controls .ant-slider-track {
     height: 4px;
-    background: rgba(255, 255, 255, 0.9);
+    background: var(--cn-text);
 }
 
 .director-pose-controls .ant-slider-handle::after {
-    background: #fff;
-    border: 1px solid #262626;
+    background: var(--cn-text);
+    border: 1px solid var(--background);
     box-shadow: none;
 }
 
@@ -13109,20 +13114,20 @@ html:not(.dark) .creation-model-picker-heading strong { color: #20242a; }
     height: 28px;
     border: 0;
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--cn-fill);
     box-shadow: none;
 }
 
 .director-pose-controls .ant-input-number-input {
     height: 28px;
     padding: 0 8px;
-    color: #f7f7f7;
+    color: var(--cn-text);
     font-size: 13px;
     text-align: center;
 }
 
 .director-pose-controls .ant-input-number:focus-within {
-    background: rgba(255, 255, 255, 0.13);
+    background: color-mix(in srgb, var(--cn-text) 13%, transparent);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -21441,3 +21446,7 @@ main[data-libtv-readonly-dense="true"] .canvas-floating-dock {
 .canvas-model-picker-description {
     display: none !important;
 }
+
+/* Compact material drag previews do not cover the workflow drop target. */
+[data-canvas-compact-drag="true"] { pointer-events: none !important; z-index: 999 !important; }
+[data-canvas-compact-drag="true"] .canvas-node-external-header { visibility: hidden; }
