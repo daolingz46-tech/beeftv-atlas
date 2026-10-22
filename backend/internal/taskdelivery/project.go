@@ -8,12 +8,13 @@ import (
 type Projection struct {
 	Outputs     []localtask.CanonicalOutput
 	ResultState string
+	Stage       string
 	Err         error
 }
 
 func Project(task model.Task, stored []localtask.CanonicalOutput, loadErr error, failedRetryBlocked bool) Projection {
 	binding := localtask.TargetBindingFromInput(task.InputJSON)
-	parsed, _ := localtask.InspectResultJSON(task.ResultJSON)
+	parsed, _ := localtask.InspectResultJSON(task.ResultJSON, task.Type)
 	if loadErr != nil {
 		outputs := parsed
 		if len(outputs) == 0 {
@@ -24,7 +25,7 @@ func Project(task model.Task, stored []localtask.CanonicalOutput, loadErr error,
 			outputs[i].MaterializationErrorCode = localtask.MaterializeErrorDeliveryUnreadable
 			outputs[i] = localtask.BindOutput(outputs[i], task.ID, binding)
 		}
-		return Projection{Outputs: outputs, ResultState: localtask.ResultStateFailedRetryable, Err: loadErr}
+		return Projection{Outputs: outputs, ResultState: localtask.ResultStateFailedRetryable, Stage: task.Stage, Err: loadErr}
 	}
 	if len(parsed) == 0 {
 		parsed = stored
@@ -38,11 +39,24 @@ func Project(task model.Task, stored []localtask.CanonicalOutput, loadErr error,
 		if got, ok := byIndex[output.OutputIndex]; ok {
 			output = got
 		}
+		if output.MaterializedAssetID == "" && (task.Stage == "delivery_paused" || task.Stage == "delivery_timed_out") {
+			output.MaterializationErrorCode = task.Stage
+		}
 		merged = append(merged, localtask.BindOutput(output, task.ID, binding))
+	}
+	state := localtask.ResultState(task.Status, merged, failedRetryBlocked)
+	stage := task.Stage
+	// Ready outputs are authoritative even when an older delivery left a stale stage.
+	if task.Status == model.TaskStatusSucceeded && state == localtask.ResultStateReady && len(merged) > 0 {
+		switch stage {
+		case "正在取回结果", "delivery_paused", "delivery_timed_out":
+			stage = "生成完成"
+		}
 	}
 	return Projection{
 		Outputs:     merged,
-		ResultState: localtask.ResultState(task.Status, merged, failedRetryBlocked),
+		ResultState: state,
+		Stage:       stage,
 	}
 }
 

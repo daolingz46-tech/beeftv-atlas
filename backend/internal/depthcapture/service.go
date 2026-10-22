@@ -5,30 +5,35 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sync"
 
 	"infinite-canvas/backend/internal/depthruntime"
-	"infinite-canvas/backend/internal/kernel"
 	"infinite-canvas/backend/internal/model"
 )
 
 // Service owns depth capture execution. Create-time quota and activity stay
 // in the application composition layer.
 type Service struct {
-	dataDir    string
-	media      Media
-	tasks      Tasks
-	installer  Installer
-	windowsKey string
-	goos       string
-	goarch     string
-	nvidia     NVIDIACheck
-	cudaProbe  CUDAProbe
-	run        CommandRun
-	getenv     func(string) string
-	stat       func(name string) error
-	mkdirTemp  func(dir, pattern string) (string, error)
-	configure  func(*exec.Cmd)
-	truncate   func(string, int) string
+	dataDir              string
+	media                Media
+	tasks                Tasks
+	installer            Installer
+	windowsKey           string
+	goos                 string
+	goarch               string
+	nvidia               NVIDIACheck
+	cudaProbe            CUDAProbe
+	run                  CommandRun
+	getenv               func(string) string
+	stat                 func(name string) error
+	mkdirTemp            func(dir, pattern string) (string, error)
+	configure            func(*exec.Cmd)
+	componentMu          sync.Mutex
+	componentState       ComponentState
+	componentCancel      context.CancelFunc
+	componentDone        chan struct{}
+	componentClosed      bool
+	componentFallbackCPU bool
 }
 
 func New(deps Deps) *Service {
@@ -92,7 +97,6 @@ func New(deps Deps) *Service {
 		stat:       stat,
 		mkdirTemp:  mkdirTemp,
 		configure:  configure,
-		truncate:   kernel.TruncateRunes,
 	}
 	return s
 }

@@ -287,10 +287,6 @@ func (s *Service) UpsertUserCanvasProjectWithTx(tx *gorm.DB, userID string, raw 
 	return s.canvasDomainWithTx(tx).UpsertUserCanvasProject(userID, raw)
 }
 
-func (s *Service) CommitUserCanvasProjectAssets(userID string, raw json.RawMessage, assets []json.RawMessage) (UserDataSummary, error) {
-	return s.canvasDomain().CommitUserCanvasProjectAssets(userID, raw, assets)
-}
-
 func (s *Service) DeleteUserCanvasProject(userID string, id string) error {
 	return s.canvasDomain().DeleteUserCanvasProject(userID, id)
 }
@@ -493,12 +489,28 @@ func (s *operationSession) CreateUserCanvasNodes(userID string, canvasID string,
 	return s.canvas.CreateUserCanvasNodes(userID, canvasID, drafts, expectedRevision)
 }
 
+func (s *operationSession) PrepareUserCanvasStoryboard(userID, canvasID, nodeID string, input canvas.StoryboardPreparation, expectedRevision int64) (canvas.UserDataSummary, canvas.StoryboardPreparationResult, error) {
+	return s.canvas.PrepareUserCanvasStoryboard(userID, canvasID, nodeID, input, expectedRevision)
+}
+
 func (s *operationSession) UpdateUserCanvasNodeFields(userID string, canvasID string, nodeID string, patch map[string]any, expectedRevision int64) (canvas.UserDataSummary, error) {
 	return s.canvas.UpdateUserCanvasNodeFields(userID, canvasID, nodeID, patch, expectedRevision)
 }
 
 func (s *operationSession) ConnectUserCanvasNodesAtRevision(userID string, canvasID string, fromNodeID string, toNodeID string, expectedRevision int64) (canvas.UserDataSummary, error) {
 	return s.canvas.ConnectUserCanvasNodesAtRevision(userID, canvasID, fromNodeID, toNodeID, expectedRevision)
+}
+
+func (s *operationSession) AppendUserCanvasStoryboardRows(userID string, canvasID string, nodeID string, drafts []canvas.StoryboardRowDraft, expectedRevision int64) (canvas.UserDataSummary, []canvas.StoryboardRowIdentity, error) {
+	return s.canvas.AppendUserCanvasStoryboardRows(userID, canvasID, nodeID, drafts, expectedRevision)
+}
+
+func (s *operationSession) UpdateUserCanvasStoryboardRows(userID string, canvasID string, nodeID string, patches []canvas.StoryboardRowPatch, expectedRevision int64) (canvas.UserDataSummary, canvas.StoryboardRowUpdate, error) {
+	return s.canvas.UpdateUserCanvasStoryboardRows(userID, canvasID, nodeID, patches, expectedRevision)
+}
+
+func (s *operationSession) RemoveUserCanvasStoryboardRows(userID string, canvasID string, nodeID string, rowIDs []string, expectedRevision int64) (canvas.UserDataSummary, int, error) {
+	return s.canvas.RemoveUserCanvasStoryboardRows(userID, canvasID, nodeID, rowIDs, expectedRevision)
 }
 
 func (s *operationSession) CommitUserCanvasDocument(userID string, canvasID string, expectedRevision int64, document json.RawMessage) (canvas.UserDataSummary, json.RawMessage, error) {
@@ -573,12 +585,23 @@ func (s *operationSession) OwnedAsset(userID, assetID string) (*model.Asset, err
 
 func (s *operationSession) BindExistingCanvasNode(userID string, patch canvas.TaskOutputBind) (canvas.TaskOutputBindResult, error) {
 	patch.AllowEmptyVideo = false
+	patch.PendingClientOperationID = ""
+	patch.TaskType = ""
 	task, err := s.repo.TaskForUser(userID, patch.TaskID)
 	if err != nil {
 		return canvas.TaskOutputBindResult{}, err
 	}
+	if task != nil {
+		patch.TaskType = task.Type
+	}
 	if task != nil && task.UserID == userID && task.ProjectID == patch.CanvasID && task.Type == model.TaskTypeTimelineRender && task.Provider == "local" && task.Model == "ffmpeg" && task.Status == model.TaskStatusSucceeded {
 		patch.AllowEmptyVideo = true
+	}
+	if task != nil && task.UserID == userID && task.ProjectID == patch.CanvasID && (task.Type == model.TaskTypeDepthCapture || task.Type == "canvas_video") && task.Status == model.TaskStatusSucceeded && task.ClientOperationID != nil {
+		target := localtask.TargetBindingFromInput(task.InputJSON)
+		if target.NodeID == patch.NodeID && target.Source == "canvas" {
+			patch.PendingClientOperationID = strings.TrimSpace(*task.ClientOperationID)
+		}
 	}
 	return s.canvas.BindTaskOutputToExistingNode(userID, patch)
 }

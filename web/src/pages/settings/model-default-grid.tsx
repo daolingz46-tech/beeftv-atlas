@@ -1,14 +1,24 @@
-import { AudioLines, Bot, Film, Image, MessageSquareText } from "lucide-react";
+import { AudioLines, Bot, Film, Image, MessageSquareText, ScanEye } from "lucide-react";
 import { Button, Select } from "antd";
-import { useMemo, useState } from "react";
+import { useEffect, useRef, useMemo, useState } from "react";
 
 import { assistantModelOptions, normalizeAssistantModel } from "@/lib/assistant-model";
+import { mediaReviewModelOptions, normalizeMediaReviewModel } from "@/lib/media-review-model";
 import { groupModelsByDisplayName, groupModelsByFamily } from "@/lib/model-selection";
-import { filterModelsByCapability, isBuiltinBeefAPIChannel, modelDisplayName, resolveModelChannel, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import {
+    filterModelsByCapability,
+    isBuiltinBeefAPIChannel,
+    modelDisplayName,
+    resolveModelChannel,
+    type AiConfig,
+    type ModelCapability,
+} from "@/stores/use-config-store";
 import { workspaceCapabilities } from "@/services/workspace-mode";
 import { getActiveUserScope, scopedLocalStorage } from "@/lib/user-scope";
 
-export type DefaultModelKey = "imageModel" | "videoModel" | "textModel" | "audioModel" | "assistantModel";
+import { recordModelPickerChange, recordModelPickerOpenChange, recordModelPickerPress, watchModelPickerBlockers, type ModelPickerSnapshot } from "./model-settings-diagnostics";
+
+export type DefaultModelKey = "imageModel" | "videoModel" | "textModel" | "audioModel" | "assistantModel" | "mediaReviewModel";
 
 type CapabilityRow = {
     kind: "capability";
@@ -20,7 +30,7 @@ type CapabilityRow = {
 };
 
 type AssistantRow = {
-    kind: "assistant";
+    kind: "assistant" | "media-review";
     id: string;
     modelKey: DefaultModelKey;
     title: string;
@@ -32,12 +42,15 @@ const rows: Array<CapabilityRow | AssistantRow> = [
     { kind: "capability", id: "video", capability: "video", modelKey: "videoModel", title: "默认视频模型", icon: Film },
     { kind: "capability", id: "text", capability: "text", modelKey: "textModel", title: "默认文本模型", icon: MessageSquareText },
     { kind: "assistant", id: "assistant", modelKey: "assistantModel", title: "助手模型", icon: Bot },
+    { kind: "media-review", id: "multimodal", modelKey: "mediaReviewModel", title: "默认多模态模型", icon: ScanEye },
     { kind: "capability", id: "audio", capability: "audio", modelKey: "audioModel", title: "默认音频模型", icon: AudioLines },
 ];
 
 export function ModelDefaultGrid({ config, onChange, onOpenChannels }: { config: AiConfig; onChange: (key: DefaultModelKey, model: string) => void; onOpenChannels?: () => void }) {
+    const rootRef = useRef<HTMLDivElement>(null);
+    useEffect(() => rootRef.current ? watchModelPickerBlockers(rootRef.current) : undefined, []);
     return (
-        <div className="model-default-settings">
+        <div ref={rootRef} className="model-default-settings">
             {rows.map((row) => (
                 <DefaultModelRow key={`${getActiveUserScope()}:${row.id}`} row={row} config={config} onChange={onChange} onOpenChannels={onOpenChannels} />
             ))}
@@ -48,10 +61,11 @@ export function ModelDefaultGrid({ config, onChange, onOpenChannels }: { config:
 function DefaultModelRow({ row, config, onChange, onOpenChannels }: { row: CapabilityRow | AssistantRow; config: AiConfig; onChange: (key: DefaultModelKey, model: string) => void; onOpenChannels?: () => void }) {
     const localMode = workspaceCapabilities().local;
     const isAssistant = row.kind === "assistant";
-    const capability = isAssistant ? "text" : row.capability;
-    const selected = isAssistant ? normalizeAssistantModel(config, config.assistantModel) : config[row.modelKey];
+    const isMediaReview = row.kind === "media-review";
+    const capability = row.kind === "capability" ? row.capability : "text";
+    const selected = isAssistant ? normalizeAssistantModel(config, config.assistantModel) : isMediaReview ? normalizeMediaReviewModel(config, config.mediaReviewModel) : config[row.modelKey];
     const channels = useMemo(() => {
-        const models = isAssistant ? assistantModelOptions(config) : filterModelsByCapability(config.models, capability, config.channels);
+        const models = isAssistant ? assistantModelOptions(config) : isMediaReview ? mediaReviewModelOptions(config) : filterModelsByCapability(config.models, capability, config.channels);
         const groups = capability === "video" ? groupModelsByDisplayName(config, models) : models.map((model) => ({ key: model, label: modelDisplayName(config, model), models: [model] }));
         return config.channels
             .map((channel) => {
@@ -65,7 +79,7 @@ function DefaultModelRow({ row, config, onChange, onOpenChannels }: { row: Capab
             })
             .filter((channel) => channel.families.length)
             .sort((a, b) => Number(b.availableCount > 0) - Number(a.availableCount > 0));
-    }, [config, capability, isAssistant]);
+    }, [config, capability, isAssistant, isMediaReview]);
     const allOptions = channels.flatMap((channel) =>
         channel.families.flatMap((family) =>
             family.models.map((group) => {
@@ -108,10 +122,11 @@ function DefaultModelRow({ row, config, onChange, onOpenChannels }: { row: Capab
     };
     const options = allOptions.filter((option) => (!channelValue || option.channelId === channelValue) && (!familyValue || option.family === familyValue));
     if (isAssistant) options.unshift({ value: "", label: "跟随默认文本模型", searchLabel: "跟随默认文本模型", channel: "", channelId: "", family: "" });
-    const unavailable = isAssistant ? Boolean(config.assistantModel && !selected) : Boolean(selected && !allOptions.some((option) => option.value === selected));
-    const value = unavailable ? undefined : isAssistant && !config.assistantModel ? "" : allOptions.some((option) => option.value === selected) ? selected : undefined;
+    if (isMediaReview) options.unshift({ value: "", label: "不使用独立多模态模型", searchLabel: "不使用独立多模态模型", channel: "", channelId: "", family: "" });
+    const unavailable = isAssistant || isMediaReview ? Boolean(config[row.modelKey] && !selected) : Boolean(selected && !allOptions.some((option) => option.value === selected));
+    const value = unavailable ? undefined : (isAssistant || isMediaReview) && !config[row.modelKey] ? "" : allOptions.some((option) => option.value === selected) ? selected : undefined;
     const Icon = row.icon;
-    const empty = !allOptions.length && !isAssistant;
+    const empty = !allOptions.length && !isAssistant && !isMediaReview;
     return (
         <section key={row.id} className="model-default-setting-row" aria-labelledby={`default-${row.id}-title`}>
             <div className="model-default-setting-label">
@@ -149,7 +164,7 @@ function DefaultModelRow({ row, config, onChange, onOpenChannels }: { row: Capab
                     aria-label={row.title}
                     className="model-default-select"
                     value={value}
-                    labelRender={(option) => (option.value === "" && isAssistant ? "跟随默认文本模型" : allOptions.find((item) => item.value === option.value)?.label || option.label)}
+                    labelRender={(option) => (option.value === "" && isAssistant ? "跟随默认文本模型" : option.value === "" && isMediaReview ? "不使用独立多模态模型" : allOptions.find((item) => item.value === option.value)?.label || option.label)}
                     options={options}
                     placeholder={unavailable ? "已选模型不可用，请重新选择" : empty ? "暂无可用模型" : "选择模型"}
                     disabled={empty}

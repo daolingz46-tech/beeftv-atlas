@@ -57,7 +57,7 @@ func runVolcengineArkImageTask(ctx context.Context, input canvasGenerationInput)
 }
 
 func volcengineArkImageDataURLs(ctx context.Context, config providerConfig, payload imageResponse) ([]map[string]string, error) {
-	return generation.VolcengineArkImageDataURLs(ctx, config, payload)
+	return generation.MaterializeImageDataURLs(ctx, config, payload)
 }
 
 func volcengineArkImageBody(input canvasGenerationInput) (map[string]interface{}, error) {
@@ -793,7 +793,7 @@ func sleepContext(ctx context.Context, duration time.Duration) error {
 }
 
 func prepareBeefAPISeedanceReferences(ctx context.Context, config providerConfig, input *canvasGenerationInput, read beefAPISeedanceMediaReader) error {
-	return generation.PrepareBeefAPISeedanceReferences(ctx, config, input, read)
+	return generation.PrepareBeefAPIVideoReferences(ctx, config, input, read)
 }
 
 func beefAPISeedanceMediaGroups(input *canvasGenerationInput) []beefAPISeedanceMediaGroup {

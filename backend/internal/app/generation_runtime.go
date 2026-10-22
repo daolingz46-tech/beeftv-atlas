@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -10,9 +11,18 @@ import (
 
 	"infinite-canvas/backend/internal/generation"
 	"infinite-canvas/backend/internal/model"
+	"infinite-canvas/backend/internal/outbound"
 )
 
 type appResourcePort struct{ service *Service }
+
+func (p appResourcePort) EnsureMetadata(ctx context.Context, userID, resourceID string) (generation.ResourceInfo, error) {
+	resource, err := p.service.resourceDomain().EnsureMediaMetadata(ctx, userID, resourceID)
+	if err != nil {
+		return generation.ResourceInfo{}, err
+	}
+	return resourceInfoFromModel(userID, resource), nil
+}
 
 func (p appResourcePort) Lookup(userID, resourceID string) (generation.ResourceInfo, error) {
 	resource, err := p.service.repo.ResourceForUser(userID, resourceID)
@@ -94,7 +104,63 @@ func (p appTaskStagePort) SetStage(ctx context.Context, stage string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return p.service.repo.WithContext(ctx).UpdateTaskStageForLease(p.task.ID, p.task.LeaseOwner, stage)
+	err := p.service.repo.WithContext(ctx).UpdateTaskStageForLease(p.task.ID, p.task.LeaseOwner, stage)
+	if err == nil && stage == "正在取回生成结果" {
+		p.service.logTaskPhase(p.task.ID, "result_transfer_start")
+	}
+	return err
+}
+
+// appTaskDeliveryPort mirrors in-generation result downloads into the same
+// task delivery projection that post-success artifact delivery uses.
+type appTaskDeliveryPort struct {
+	service *Service
+	taskID  string
+}
+
+type appTaskDownloadCachePort struct {
+	service        *Service
+	userID, taskID string
+}
+
+func (p appTaskDownloadCachePort) PartialPath() string {
+	return (generationDeliveryMediaAdapter{service: p.service}).artifactDownloadPartialPath(p.userID, p.taskID+":provider")
+}
+
+func (p appTaskDeliveryPort) ReportDelivery(progress outbound.ResumableProgress) {
+	taskID := strings.TrimSpace(p.taskID)
+	if p.service == nil || taskID == "" {
+		return
+	}
+	identity := taskID + ":0"
+	p.service.deliveryProgressRegistry().record(identity, deliveryProgressFromOutbound(identity, progress))
+}
+
+func (p appTaskDeliveryPort) ClearDelivery() {
+	taskID := strings.TrimSpace(p.taskID)
+	if p.service == nil || taskID == "" {
+		return
+	}
+	p.service.deliveryProgressRegistry().clear(taskID + ":0")
+	p.service.logTaskPhase(taskID, "result_transfer_end")
+}
+
+// Store only phase boundaries in the existing task log, never URLs or bytes.
+// Transfer end includes a failed attempt; terminal task status owns success.
+func (s *Service) logTaskPhase(taskID, phase string) {
+	if s.repo == nil {
+		return
+	}
+	task, err := s.repo.Task(taskID)
+	if err != nil || task == nil {
+		return
+	}
+	payload, _ := json.Marshal(map[string]string{"phase": phase})
+	message := "开始取回生成结果"
+	if phase == "result_transfer_end" {
+		message = "取回生成结果阶段结束"
+	}
+	_ = s.log(task.UserID, task.ID, "info", message, string(payload))
 }
 
 func (p appReceiptPort) Observe(observation generation.TransportObservation) {
@@ -105,6 +171,8 @@ func (p appReceiptPort) Observe(observation generation.TransportObservation) {
 		StartedAt:             observation.StartedAt.Format(time.RFC3339Nano),
 		ResponseLimitBytes:    observation.ResponseLimitBytes,
 		Dispatched:            observation.Dispatched,
+		TransportPhase:        observation.TransportPhase,
+		TransportRoute:        observation.TransportRoute,
 		HTTPStatus:            observation.HTTPStatus,
 		DeclaredResponseBytes: observation.DeclaredResponseBytes,
 		ReceivedBytes:         observation.ReceivedBytes,
@@ -150,11 +218,11 @@ func (p appImagePort) Intercept(req *http.Request) (bool, []byte, string, error)
 		return false, nil, "", nil
 	}
 	if p.service == nil {
-		return true, nil, "", imageRecoveryError{generation.ErrImageOwnerMissing}
+		return true, nil, "", imagePreparationError{generation.ErrImageOwnerMissing}
 	}
 	row, handled, err := prepareImageSubmission(p.service, req)
 	if err != nil {
-		return true, nil, "", imageRecoveryError{err}
+		return true, nil, "", imagePreparationError{err}
 	}
 	if !handled {
 		data, mimeType, sendErr := generation.DoBinaryWithConsumer(req, nil)
@@ -285,23 +353,29 @@ func (s *Service) applyGenerationRuntime(ctx context.Context, meta generation.Ca
 		return bindRequestReceipts(ctx)
 	}
 	runtime := generation.Runtime{
-		Resources: appResourcePort{service: s},
-		Limits:    appLimitsPort{service: s},
-		Receipts:  appReceiptPort{service: s},
-		Images:    appImagePort{service: s},
-		Workflow:  appWorkflowPort{service: s},
-		Prompt:    appPromptPort{service: s},
-		Config:    appConfigPort{service: s},
-		Style:     appStylePort{service: s},
-		Probe:     appMediaProbe{},
-		Call:      meta,
+		ReferenceStorage: appReferenceStoragePort{service: s},
+		Resources:        appResourcePort{service: s},
+		Limits:           appLimitsPort{service: s},
+		Receipts:         appReceiptPort{service: s},
+		Images:           appImagePort{service: s},
+		Workflow:         appWorkflowPort{service: s},
+		Prompt:           appPromptPort{service: s},
+		Config:           appConfigPort{service: s},
+		Style:            appStylePort{service: s},
+		Probe:            appMediaProbe{},
+		Call:             meta,
 	}
 	if existing, ok := generation.RuntimeFromContext(ctx); ok {
 		runtime.Endpoints = existing.Endpoints
 		runtime.Stages = existing.Stages
+		runtime.Delivery = existing.Delivery
+		runtime.ReferenceProgress = existing.ReferenceProgress
 		if !replaceCall {
 			runtime.Call = generation.IdentityCallMeta(existing.Call, meta)
 		}
+	}
+	if s.dataDir != "" && runtime.Call.UserID != "" && runtime.Call.TaskID != "" {
+		runtime.DownloadCache = appTaskDownloadCachePort{service: s, userID: runtime.Call.UserID, taskID: runtime.Call.TaskID}
 	}
 	return generation.WithRuntime(ctx, runtime)
 }

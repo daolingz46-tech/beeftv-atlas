@@ -1,4 +1,4 @@
-import { canvasNodeToAsset, declaredCanvasNodeAssetCategory, findCanvasNodeAsset, type CanvasAssetSource } from "@/lib/canvas/canvas-node-asset";
+import { assetResourceId, canvasNodeResourceId, canvasNodeToAsset, declaredCanvasNodeAssetCategory, findCanvasNodeAsset, type CanvasAssetSource } from "@/lib/canvas/canvas-node-asset";
 import { canvasVideoAssetPreviewUrl } from "@/lib/canvas/canvas-media-preview";
 import { readImageMeta } from "@/lib/image-utils";
 import { parseAssetRecord } from "@/lib/asset-record";
@@ -163,7 +163,19 @@ async function persistCanvasNodeAsset(options: EnsureCanvasNodeAssetOptions): Pr
         created = true;
     }
     if (!asset) throw new Error("素材写入本地失败");
-    if (declaredCategory && asset.category !== declaredCategory) {
+    const inferredResourceId = canvasNodeResourceId(options.node) || assetResourceId(asset);
+    const canonicalStorageKey = inferredResourceId ? `resource:${inferredResourceId}` : undefined;
+    const currentStorageKey = "storageKey" in asset.data ? asset.data.storageKey : undefined;
+    if (canonicalStorageKey && asset.kind !== "text" && asset.kind !== "entity" && (!resourceIdFromStorageKey(currentStorageKey) || asset.pendingRemoteUpload)) {
+        store.updateAsset(asset.id, {
+            ...(declaredCategory && asset.category !== declaredCategory ? { category: declaredCategory } : {}),
+            pendingRemoteUpload: false,
+            remoteUploadError: undefined,
+            data: { ...asset.data, storageKey: canonicalStorageKey } as Asset["data"],
+            metadata: { ...asset.metadata, resourceKey: canonicalStorageKey },
+        });
+        asset = useAssetStore.getState().assets.find((item) => item.id === asset?.id) || asset;
+    } else if (declaredCategory && asset.category !== declaredCategory) {
         store.updateAsset(asset.id, { category: declaredCategory });
         asset = useAssetStore.getState().assets.find((item) => item.id === asset?.id) || asset;
     }
@@ -251,6 +263,7 @@ export function hasBackendDeliveredGenerationOutputs(task: Pick<GenerationTask, 
 }
 
 export type HydrateBackendGeneratedAssetDependencies = {
+    expectedScope?: CapturedUserScope;
     getAsset?: (id: string, signal?: AbortSignal) => Promise<{ asset: Asset }>;
     readAssets?: () => Asset[];
     writeAsset?: (asset: Asset) => void;
@@ -272,13 +285,16 @@ export async function hydrateBackendGeneratedAsset(
     throwIfAborted(signal);
     const id = assetId.trim();
     if (!id) throw new Error("任务产物尚未由后端交付");
-    const getAsset = dependencies.getAsset ?? defaultHydrateBackendGeneratedAssetDependencies.getAsset!;
+    const expectedScope = dependencies.expectedScope;
+    if (expectedScope) assertUserScope(expectedScope);
+    const getAsset = dependencies.getAsset ?? ((id, signal) => getWorkspaceAsset(id, signal, { expectedScope }).then((payload) => ({ asset: payload.asset })));
     const readAssets = dependencies.readAssets ?? defaultHydrateBackendGeneratedAssetDependencies.readAssets!;
     const writeAsset = dependencies.writeAsset ?? defaultHydrateBackendGeneratedAssetDependencies.writeAsset!;
     const existing = readAssets().find((asset) => asset.id === id);
     if (existing) return existing;
     const payload = await getAsset(id, signal);
     throwIfAborted(signal);
+    if (expectedScope) assertUserScope(expectedScope);
     const asset = parseAssetRecord(payload.asset);
     writeAsset(asset);
     return asset;

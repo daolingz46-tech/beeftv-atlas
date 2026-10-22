@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import { ownedResourceIdFromMediaRef } from "@/services/api/resources";
 import { apiClient, configureApiRuntime } from "@/services/api/request";
-import { copyOwnedMediaToClipboard, copyOwnedMediaFilesToClipboard, downloadOwnedOrBrowserMedia, isWailsNativeShell, reportOwnedMediaSave, saveOwnedOrBrowserBlob, saveOwnedOrBrowserVideoBlob } from "@/services/desktop-media-save";
+import { copyOwnedMediaToClipboard, copyOwnedMediaFilesToClipboard, downloadOwnedOrBrowserMedia, isWailsNativeShell, reportOwnedMediaSave, saveOwnedNativeArchiveFiles, saveOwnedOrBrowserBlob, saveOwnedOrBrowserVideoBlob } from "@/services/desktop-media-save";
 import { sanitizeDownloadFileName } from "@/lib/canvas/canvas-media-download";
 import { getActiveUserScope, setActiveUserScope } from "@/lib/user-scope";
 import { captureUserScope, UserScopeAbandonedError } from "@/lib/user-scope-guard";
@@ -115,7 +115,7 @@ describe("native media save", () => {
         expect(helper).toContain("bytesToBase64");
         expect(helper).not.toContain("Array.from(bytes)");
         expect(helper).toContain("32 * 1024 * 1024");
-        expect(readFileSync(resolve(import.meta.dir, "../src/lib/canvas/canvas-export.ts"), "utf8")).toContain("saveOwnedOrBrowserBlob");
+        expect(readFileSync(resolve(import.meta.dir, "../src/lib/canvas/canvas-export.ts"), "utf8")).toContain("saveOwnedNativeArchiveFiles");
         expect(readFileSync(resolve(import.meta.dir, "../src/pages/assets/asset-transfer.ts"), "utf8")).toContain("saveOwnedOrBrowserBlob");
         const timeline = readFileSync(resolve(import.meta.dir, "../src/components/canvas/canvas-timeline-dialog.tsx"), "utf8");
         expect(timeline).toContain("saveOwnedOrBrowserVideoBlob");
@@ -152,6 +152,37 @@ describe("native media save", () => {
         expect(calls[0]?.[0]).toBe("画布.zip");
         expect(calls[0]?.[1]).toBe("AQID");
     });
+
+    test("subtitle export saves UTF-8 SRT through the native artifact binding and reports cancel/error correctly", async () => {
+        const subtitle = readFileSync(resolve(import.meta.dir, "../src/components/canvas/canvas-subtitle-dialog.tsx"), "utf8");
+        const exportSrt = subtitle.slice(subtitle.indexOf("const exportSrt ="), subtitle.indexOf("const runAiHighlight ="));
+        expect(exportSrt).toContain("reportOwnedMediaSave(message, saveOwnedOrBrowserBlob(");
+        expect(exportSrt).not.toContain("saveAs(");
+        const content = "1\n00:00:00,000 --> 00:00:01,500\n你好，字幕。\n";
+        const calls: Array<[string, string]> = [];
+        let outcome: boolean | Error = true;
+        Object.assign(globalThis, { window: { location: { protocol: "wails:" }, go: { main: { DesktopApp: {
+            SaveOwnedArtifact: async (name: string, data: string) => {
+                calls.push([name, data]);
+                if (outcome instanceof Error) throw outcome;
+                return outcome;
+            },
+        } } } } });
+        const messages: string[] = [];
+        const message = { success: (text: string) => messages.push(text), error: (text: string) => messages.push(text) };
+        const save = () => reportOwnedMediaSave(message, saveOwnedOrBrowserBlob("片段.srt", new Blob([content], { type: "text/plain;charset=utf-8" })));
+        await save();
+        expect(calls[0]?.[0]).toBe("片段.srt");
+        expect(Buffer.from(calls[0]![1], "base64").toString("utf8")).toBe(content);
+        expect(messages).toEqual(["已保存到所选位置"]);
+        messages.length = 0;
+        outcome = false;
+        await save();
+        expect(messages).toEqual([]);
+        outcome = new Error("磁盘空间不足");
+        await save();
+        expect(messages).toEqual(["磁盘空间不足"]);
+    });
 });
 
 function nativeVideoSave(save: (name: string, id: string) => Promise<boolean> = async () => true) {
@@ -167,6 +198,17 @@ function nativeVideoSave(save: (name: string, id: string) => Promise<boolean> = 
 }
 
 describe("native video export resource save", () => {
+    test("large archive passes only owned references and small metadata, without uploading a backup", async () => {
+        const expected = nativeVideoSave();
+        const blob = new Blob([new Uint8Array(33 * 1024 * 1024)], { type: "application/zip" });
+        apiClient.defaults.adapter = async () => { throw new Error("archive must not be uploaded"); };
+        window.go!.main!.DesktopApp!.SaveOwnedArchive = async (name, entries) => {
+            expect(name).toBe("画布.zip");
+            expect(entries).toEqual([{ name: "projects.json", data: Buffer.from('{"projects":[]}').toString("base64") }, { name: "media/video.mp4", resourceId: "owned-video" }]);
+            return false;
+        };
+        expect(await saveOwnedNativeArchiveFiles("画布.zip", [{ name: "projects.json", data: '{"projects":[]}' }, { name: "media/video.mp4", data: blob, resourceId: "owned-video" }], expected)).toBe("cancelled");
+    });
     test("33 MiB uploads real multipart Blob and saves the returned owned resource", async () => {
         const saved: Array<[string, string]> = [];
         const expected = nativeVideoSave(async (name, id) => { saved.push([name, id]); return true; });

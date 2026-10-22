@@ -44,6 +44,8 @@ type Task struct {
 	ErrorCode                 string                  `json:"errorCode,omitempty" gorm:"-"`
 	ResultState               string                  `json:"resultState,omitempty" gorm:"-"`
 	Outputs                   []TaskOutput            `json:"outputs,omitempty" gorm:"-"`
+	Delivery                  *TaskDeliveryProgress   `json:"delivery,omitempty" gorm:"-"`
+	ReferenceProgress         *TaskReferenceProgress  `json:"referenceProgress,omitempty" gorm:"-"`
 	FailureDiagnostics        *TaskFailureDiagnostics `json:"failureDiagnostics,omitempty" gorm:"serializer:json;type:text"`
 	Attempts                  int                     `json:"attempts"`
 	StartedAt                 *time.Time              `json:"startedAt"`
@@ -75,6 +77,8 @@ type TaskRequestEvidence struct {
 	Operation             string `json:"operation"`
 	Method                string `json:"method"`
 	Dispatched            bool   `json:"dispatched"`
+	TransportPhase        string `json:"transportPhase,omitempty"`
+	TransportRoute        string `json:"transportRoute,omitempty"`
 	Outcome               string `json:"outcome"`
 	HTTPStatus            int    `json:"httpStatus,omitempty"`
 	RequestID             string `json:"requestId,omitempty"`
@@ -163,4 +167,30 @@ type TaskOutputTarget struct {
 	MessageID      string `json:"messageId,omitempty"`
 	ConversationID string `json:"conversationId,omitempty"`
 	Source         string `json:"source,omitempty"`
+}
+
+// TaskDeliveryProgress is a transient, process-local view of in-flight artifact
+// downloads. It is never persisted and is absent once delivery finishes.
+type TaskDeliveryProgress struct {
+	Outputs []TaskDeliveryOutputProgress `json:"outputs"`
+}
+
+// Observations only; never contains an upstream URL, upload ticket or local path.
+type TaskReferenceProgress struct {
+	Label          string `json:"label"`
+	Phase          string `json:"phase"`
+	LoadedBytes    int64  `json:"loadedBytes"`
+	TotalBytes     int64  `json:"totalBytes"`
+	BytesPerSecond int64  `json:"bytesPerSecond"`
+	StartedAt      int64  `json:"startedAt"`
+	UpdatedAt      int64  `json:"updatedAt"`
+}
+
+type TaskDeliveryOutputProgress struct {
+	OutputIndex     int    `json:"outputIndex"`
+	DownloadedBytes int64  `json:"downloadedBytes"`
+	TotalBytes      int64  `json:"totalBytes"`
+	BytesPerSecond  int64  `json:"bytesPerSecond"`
+	UpdatedAt       int64  `json:"updatedAt"`
+	State           string `json:"state"`
 }

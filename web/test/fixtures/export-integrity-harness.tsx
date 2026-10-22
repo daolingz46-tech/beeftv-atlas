@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client";
 import { App } from "antd";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import CanvasPage from "../../src/pages/canvas";
 import { useCanvasStore, type CanvasProject } from "../../src/stores/canvas/use-canvas-store";
@@ -32,7 +32,18 @@ function Controls() {
     return <button onClick={() => void reportOwnedMediaSave(message, exportCanvasProjects([fixtureProject("missing")]))}>测试缺失导出</button>;
 }
 
+function RouteReceipt() {
+    const location = useLocation();
+    return <output data-testid="canvas-route">{location.pathname}{location.search}</output>;
+}
+
 Object.assign(window, { exportFixture: {
+    seedBlockingExport() {
+        const project = fixtureProject("blocked-export");
+        project.timeline!.clips[0]!.directMedia!.storageKey = "resource:blocked-export";
+        useCanvasStore.setState({ projects: [project] });
+        return project;
+    },
     async export() {
         await setMediaBlob("audio:fixture:voice", new Blob(["unique archive bytes"], { type: "audio/wav" }));
         await exportCanvasProjects([fixtureProject("first"), fixtureProject("second")]);
@@ -73,6 +84,6 @@ useUserStore.setState({ hydrated: true, storageMode: "local", user: null });
 useCanvasStore.setState({ hydrated: true });
 createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <MemoryRouter initialEntries={[window.location.search.includes("new=1") ? "/canvas?mode=new" : "/canvas"]}><App><Controls /><CanvasPage /></App></MemoryRouter>
+        <MemoryRouter initialEntries={[window.location.search.includes("new=1") ? "/canvas?mode=new" : "/canvas"]}><App><Controls /><RouteReceipt /><CanvasPage /></App></MemoryRouter>
     </QueryClientProvider>,
 );

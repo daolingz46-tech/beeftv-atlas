@@ -66,12 +66,18 @@ func RouteFailureCode(info FailureInfo) string {
 	if info.StatusCode > 0 {
 		return fmt.Sprintf("upstream_%d", info.StatusCode)
 	}
+	if info.PreparationFailed && !info.ImageRecovery {
+		return "request_not_sent"
+	}
 	return "submission_unknown"
 }
 
 func SafeRouteRejection(info FailureInfo) bool {
 	if info.ImageRecovery {
 		return false
+	}
+	if info.PreparationFailed {
+		return true
 	}
 	if info.SlotCode != "" {
 		return true

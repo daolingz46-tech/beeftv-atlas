@@ -1,8 +1,10 @@
+import { createClientId } from "@/lib/client-id";
 import { getMediaBlob } from "@/services/file-storage";
 import { resolveReferenceMediaDuration } from "@/lib/reference-media-metadata";
 import { getImageBlob } from "@/services/image-storage";
 import { resourceIdFromStorageKey, resourceStorageKey, uploadResourceFile } from "@/services/api/resources";
-import { createGenerationTask, waitForGenerationTask, type GenerationTask, type CreateTaskInput } from "@/services/api/task-center";
+import { createGenerationTask, findGenerationTaskByOperation, waitForGenerationTask, type GenerationTask, type CreateTaskInput } from "@/services/api/task-center";
+import { submitGenerationCommand } from "./generation-submission";
 import { modelCapabilityConfigFor } from "@/lib/model-capabilities";
 import { grokImagePromptLimitError } from "@/lib/grok-image-prompt-limit";
 import { resolveGenerationWorkflowExecution, type GenerationWorkflowExecution } from "@/lib/generation-workflow-execution";
@@ -16,7 +18,7 @@ import { assertAgentExchangeBudget } from "@/lib/canvas/agent-context-budget";
 import { assertVideoCapability } from "@/services/api/video-validation";
 import { ApiError } from "@/services/api/request";
 import { assertUserScope, captureUserScope } from "@/lib/user-scope-guard";
-import { isReferenceHTTPSLink, type ResolveReferenceLinks, type ReferenceLinkRequest } from "./reference-link-replacement";
+import { isReferenceHTTPSLink, uploadReferenceLinks, type ResolveReferenceLinks, type ReferenceLinkRequest } from "./reference-link-replacement";
 
 export { logicalModelIDForConfig };
 
@@ -60,12 +62,14 @@ export type GenerationTaskDependencies = {
     createTask: typeof createGenerationTask;
     waitTask: typeof waitForGenerationTask;
     createId: () => string;
+    findTask?: typeof findGenerationTaskByOperation;
 };
 
 const defaultDependencies: GenerationTaskDependencies = {
     createTask: createGenerationTask,
     waitTask: waitForGenerationTask,
-    createId: () => crypto.randomUUID(),
+    createId: () => createClientId(),
+    findTask: findGenerationTaskByOperation,
 };
 
 type PreparedGenerationReferences = {
@@ -283,29 +287,42 @@ async function createAndWaitGenerationTask(options: BackendGenerationTaskOptions
 
 async function createBackendGenerationTask(options: BackendGenerationTaskOptions, prepared: PreparedGenerationReferences, dependencies: GenerationTaskDependencies) {
     const expectedScope = options.expectedScope ?? captureUserScope();
+    const operationId = options.clientOperationId || dependencies.createId();
+    options = { ...options, clientOperationId: operationId };
     const submit = () => {
         throwIfAborted(options.signal);
         assertUserScope(expectedScope);
-        return dependencies.createTask(backendGenerationTaskInput(options, prepared), { expectedScope });
+        return submitGenerationCommand(backendGenerationTaskInput(options, prepared), operationId,
+            (input) => { assertUserScope(expectedScope); return dependencies.createTask(input, { expectedScope }); },
+            dependencies.findTask && options.projectId ? () => { assertUserScope(expectedScope); return dependencies.findTask!(operationId, options.projectId!); } : undefined,
+            () => !options.signal?.aborted);
     };
     let task: GenerationTask;
     try {
         task = await submit();
     } catch (error) {
         // Only this admission error guarantees that no task/upstream submission exists.
-        if (!(error instanceof ApiError) || error.reason !== "reference_media_requires_url" || !options.resolveReferenceLinks) throw error;
+        if (!(error instanceof ApiError) || error.reason !== "reference_media_requires_url") throw error;
         const groups = ["referenceImages", "referenceVideos", "referenceAudios"] as const;
         const labels = ["参考图片", "参考视频", "参考音频"];
         const references: ReferenceLinkRequest[] = [];
+        const transport = resolveModelRequestConfig(options.config, options.config.model).referenceMediaTransport;
+        const required = error.details?.requiredReferences;
+        const needsURL = (kind: string, index: number, mask = false) => !Array.isArray(required) || required.some((item) => item && typeof item === "object" && item.kind === kind && item.index === index && Boolean(item.mask) === mask);
         groups.forEach((group, kind) => prepared[group].forEach((media, index) => {
-            if (media.storageKey || !isReferenceHTTPSLink(media.url || "")) references.push({ key: `${group}:${index}`, label: `${labels[kind]} ${index + 1}`, name: media.name });
+            const mediaKind = (["image", "video", "audio"] as const)[kind];
+            if (needsURL(mediaKind, index) && (media.storageKey || !isReferenceHTTPSLink(media.url || ""))) references.push({ key: `${group}:${index}`, label: `${labels[kind]} ${index + 1}`, name: media.name, resourceID: resourceIdFromStorageKey(media.storageKey) || undefined, upload: transport?.[mediaKind] !== "link" });
         }));
-        if (prepared.mask && (prepared.mask.storageKey || !isReferenceHTTPSLink(prepared.mask.url || ""))) references.push({ key: "mask:0", label: "遮罩", name: prepared.mask.name });
+        if (prepared.mask && needsURL("image", 0, true) && (prepared.mask.storageKey || !isReferenceHTTPSLink(prepared.mask.url || ""))) references.push({ key: "mask:0", label: "遮罩", name: prepared.mask.name, resourceID: resourceIdFromStorageKey(prepared.mask.storageKey) || undefined, upload: transport?.image !== "link" });
         if (!references.length) throw error;
-        const links = await options.resolveReferenceLinks(references, options.signal);
+        const nodeId = options.metadata?.nodeId;
+        const target = options.projectId && typeof nodeId === "string" && nodeId ? { projectId: options.projectId, nodeId } : undefined;
+        const links = options.resolveReferenceLinks
+            ? await options.resolveReferenceLinks(references, options.signal, target)
+            : await uploadReferenceLinks(references, options.signal, target);
         throwIfAborted(options.signal);
         assertUserScope(expectedScope);
-        if (!links) throw error;
+        if (!links || references.some((reference) => !links[reference.key])) throw error;
         for (const reference of references) {
             if (!isReferenceHTTPSLink(links[reference.key] || "")) throw new Error(`${reference.label}需要有效的 HTTPS 链接`);
         }
@@ -461,7 +478,7 @@ export function backendProviderConfig(config: AiConfig, mode: BackendGenerationM
     if (workflow) return workflowProviderConfig(config, requestConfig, workflow);
     const generationOptions = {
         size: config.size,
-        quality: omittedImageQuality(config.quality),
+        quality: omittedImageQuality(config.quality, requestConfig),
         imageResolution: config.imageResolution,
         transparentBackground: config.transparentBackground,
         count: config.count,
@@ -485,6 +502,7 @@ export function backendProviderConfig(config: AiConfig, mode: BackendGenerationM
         interfaceType: requestConfig.interfaceType,
         baseUrl: requestConfig.baseUrl,
         referenceAssetOrigin: requestConfig.referenceAssetOrigin,
+        referenceMediaTransport: requestConfig.referenceMediaTransport,
         apiKey: requestConfig.credentialRef ? "" : requestConfig.apiKey,
         secretKey: requestConfig.credentialRef ? "" : requestConfig.secretKey,
         headers: requestConfig.headers,
@@ -553,7 +571,7 @@ function logicalCapabilityOptions(config: AiConfig, mode: BackendGenerationMode)
     const spec = channel.modelProfiles?.find((item) => item.model === modelOptionName(config.model))?.logicalCapabilitySpec;
     const candidates: Record<string, unknown> =
         mode === "image"
-            ? { size: config.size, quality: omittedImageQuality(config.quality), transparentBackground: config.transparentBackground === "true", count: Number(config.count) }
+            ? { size: config.size, quality: omittedImageQuality(config.quality, resolveModelRequestConfig(config, config.model)), transparentBackground: config.transparentBackground === "true", count: Number(config.count) }
             : mode === "video"
               ? { size: config.size, videoSeconds: Number(config.videoSeconds), vquality: config.vquality, videoGenerateAudio: config.videoGenerateAudio === "true", videoWatermark: config.videoWatermark === "true" }
               : mode === "audio"
@@ -565,10 +583,11 @@ function logicalCapabilityOptions(config: AiConfig, mode: BackendGenerationMode)
     return filtered;
 }
 
-function omittedImageQuality(value: string | undefined) {
+function omittedImageQuality(value: string | undefined, request: { model: string; interfaceType?: string }) {
     const normalized = String(value || "")
         .trim()
         .toLowerCase();
+    if (request.interfaceType === "openai-image" && request.model.trim().toLowerCase() === "gpt-image-2" && ["", "auto", "any"].includes(normalized)) return "low";
     return normalized === "auto" || normalized === "any" ? undefined : value;
 }
 

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"infinite-canvas/backend/internal/bootstrap"
+	"infinite-canvas/backend/internal/desktopstorage"
+	"infinite-canvas/backend/internal/model"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -25,11 +27,18 @@ type DesktopRuntimeConfig struct {
 }
 
 type DesktopApp struct {
-	mu             sync.RWMutex
-	dataDir        string
-	wailsCtx       context.Context
-	chooseSavePath func(ctx context.Context, fileName string) (string, error)
-	copyOwnedMedia func(resourceID, destPath string) error
+	mu                      sync.RWMutex
+	migrationMu             sync.Mutex
+	migrating               bool
+	migrationCancel         context.CancelFunc
+	migrationProgress       desktopstorage.Progress
+	referenceUploadProgress model.TaskReferenceProgress
+	closing                 bool
+	storageRoot             string
+	dataDir                 string
+	wailsCtx                context.Context
+	chooseSavePath          func(ctx context.Context, fileName string) (string, error)
+	copyOwnedMedia          func(resourceID, destPath string) error
 }
 
 // Wails reflects every field type reachable from a bound object. Keeping the
@@ -58,27 +67,14 @@ func newDesktopApp(dataDir string) *DesktopApp {
 func (a *DesktopApp) start(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.migrating || a.closing {
+		return errors.New("本地工作区正在关闭或迁移，请稍后重试")
+	}
 	if a.runtime() != nil {
 		return nil
 	}
-	listenAddr := strings.TrimSpace(os.Getenv("CANVAS_DESKTOP_BACKEND_ADDR"))
-	if listenAddr == "" {
-		listenAddr = "127.0.0.1:0"
-	}
-	runtime, err := bootstrap.Open(ctx, bootstrap.Config{
-		Profile:         bootstrap.ProfileDesktop,
-		DataDir:         a.dataDir,
-		DatabaseDriver:  "sqlite",
-		ListenAddr:      listenAddr,
-		LaunchToken:     strings.TrimSpace(os.Getenv("CANVAS_DESKTOP_LAUNCH_TOKEN")),
-		AutoMigrate:     true,
-		ShutdownTimeout: 10 * time.Minute,
-	})
+	runtime, err := openDesktopRuntime(ctx, a.dataDir)
 	if err != nil {
-		return err
-	}
-	if err := runtime.Start(); err != nil {
-		_ = runtime.Close(context.Background())
 		return err
 	}
 	desktopRuntimeRegistryMu.Lock()
@@ -90,21 +86,45 @@ func (a *DesktopApp) start(ctx context.Context) error {
 	return nil
 }
 
+func openDesktopRuntime(ctx context.Context, dataDir string) (*bootstrap.Runtime, error) {
+	listenAddr := strings.TrimSpace(os.Getenv("CANVAS_DESKTOP_BACKEND_ADDR"))
+	if listenAddr == "" {
+		listenAddr = "127.0.0.1:0"
+	}
+	runtime, err := bootstrap.Open(ctx, bootstrap.Config{
+		Profile:         bootstrap.ProfileDesktop,
+		DataDir:         dataDir,
+		DatabaseDriver:  "sqlite",
+		ListenAddr:      listenAddr,
+		LaunchToken:     strings.TrimSpace(os.Getenv("CANVAS_DESKTOP_LAUNCH_TOKEN")),
+		AutoMigrate:     true,
+		ShutdownTimeout: 10 * time.Minute,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := runtime.Start(); err != nil {
+		_ = runtime.Close(context.Background())
+		return nil, err
+	}
+	return runtime, nil
+}
+
 func (a *DesktopApp) stop(ctx context.Context) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	runtime := a.runtime()
 	if runtime == nil {
 		a.clearUpdater()
+		a.mu.Unlock()
 		return nil
 	}
-	err := runtime.Close(ctx)
 	removeMCPRuntime(a.dataDir)
 	desktopRuntimeRegistryMu.Lock()
 	delete(desktopRuntimeRegistry, a)
 	desktopRuntimeRegistryMu.Unlock()
 	a.clearUpdater()
-	return err
+	a.mu.Unlock()
+	return runtime.Close(ctx)
 }
 
 func (a *DesktopApp) RuntimeConfig() DesktopRuntimeConfig {
@@ -153,6 +173,20 @@ func (a *DesktopApp) SaveOwnedMedia(fileName string, resourceID string) (bool, e
 func (a *DesktopApp) SaveOwnedArtifact(fileName string, data []byte) (bool, error) {
 	return a.saveToChosenPath(fileName, func(path string) error {
 		return bootstrap.WriteOwnedArtifact(path, data)
+	})
+}
+
+func (a *DesktopApp) SaveOwnedArchive(fileName string, entries []bootstrap.OwnedArchiveEntry) (bool, error) {
+	return a.saveToChosenPath(fileName, func(path string) error {
+		runtime := a.runtime()
+		if runtime == nil {
+			return errors.New("本地后端尚未就绪")
+		}
+		ctx, err := a.dialogContext()
+		if err != nil {
+			return err
+		}
+		return runtime.WriteOwnedArchiveTo(ctx, entries, path)
 	})
 }
 
@@ -243,7 +277,13 @@ func (a *DesktopApp) startup(ctx context.Context) {
 func (a *DesktopApp) shutdown(_ context.Context) {
 	a.mu.Lock()
 	a.wailsCtx = nil
+	a.closing = true
+	if a.migrationCancel != nil {
+		a.migrationCancel()
+	}
 	a.mu.Unlock()
+	a.migrationMu.Lock()
+	defer a.migrationMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := a.stop(ctx); err != nil {

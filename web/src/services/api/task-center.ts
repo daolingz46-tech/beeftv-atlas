@@ -1,8 +1,11 @@
 import { generationErrorMessage } from "@/lib/generation-error";
-import { assertUserScope, isUserScopeAbandonedError, type CapturedUserScope } from "@/lib/user-scope-guard";
-import { http, apiBaseURL, type BackendEnvelope, type HttpRequestConfig } from "@/services/api/request";
+import { GENERATION_RESULT_FETCH_STAGE } from "@/lib/generation-delivery-progress";
+import { assertUserScope, captureUserScope, isUserScopeAbandonedError, type CapturedUserScope } from "@/lib/user-scope-guard";
+import { ApiError, http, apiBaseURL, type BackendEnvelope, type HttpRequestConfig } from "@/services/api/request";
 import { consumeTaskTextStream, createTaskTextStreamParser, type TaskTextStreamEvent } from "@/services/api/task-text-stream";
 import { recordDiagnosticEvent } from "@/services/diagnostics/client-diagnostics";
+import { publishGenerationDeliveryProgress } from "@/stores/use-generation-delivery-progress";
+import { beginTaskReferenceObservation, publishTaskReferenceProgress } from "@/services/task-reference-progress";
 
 export type { BackendEnvelope } from "@/services/api/request";
 
@@ -15,6 +18,16 @@ export type GenerationTaskOutput = {
     providerArtifactRef?: string;
     materializedAssetId?: string;
     materializationErrorCode?: string;
+};
+
+export type GenerationTaskDeliveryProgress = {
+    outputIndex: number;
+    downloadedBytes: number;
+    /** -1 when the remote size is unknown. */
+    totalBytes: number;
+    bytesPerSecond: number;
+    updatedAt?: number;
+    state: "downloading" | "retrying" | "waiting";
 };
 
 export type GenerationTask = {
@@ -48,6 +61,9 @@ export type GenerationTask = {
     resultJson?: string;
     resultState?: GenerationTaskResultState;
     outputs?: GenerationTaskOutput[];
+    /** Present only while the backend is fetching a result to local storage. */
+    delivery?: { outputs: GenerationTaskDeliveryProgress[] };
+    referenceProgress?: { label: string; phase: "preparing" | "transferring" | "processing"; loadedBytes: number; totalBytes: number; bytesPerSecond: number; startedAt: number; updatedAt: number };
     textDraft?: string;
     error?: string;
     attempts: number;
@@ -138,6 +154,16 @@ export type GenerationTaskPageRequest = {
     cursor?: string;
 };
 
+/** A missing receipt never authorizes another paid generation. */
+export async function findGenerationTaskByOperation(operationId: string, projectId: string, signal?: AbortSignal): Promise<GenerationTask | undefined> {
+    try {
+        return await http.get<GenerationTask>(`/tasks/by-operation/${encodeURIComponent(operationId)}`, { params: { projectId }, signal });
+    } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return undefined;
+        throw error;
+    }
+}
+
 type GenerationTaskPage<T> = { tasks: T[]; nextCursor?: string };
 type GenerationTaskListOptions = { projectId?: string; activeOnly?: boolean };
 type GenerationTaskListDependencies = {
@@ -155,6 +181,8 @@ const defaultGenerationTaskListDependencies: GenerationTaskListDependencies = {
 };
 
 export async function listGenerationTasks(limit = 30, options?: { projectId?: string; activeOnly?: boolean }, dependencies: GenerationTaskListDependencies = defaultGenerationTaskListDependencies, signal?: AbortSignal) {
+    const expected = captureUserScope();
+    const observationRequest = beginTaskReferenceObservation();
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(10_000, Math.trunc(limit))) : 30;
     const baseRequest = {
@@ -176,7 +204,9 @@ export async function listGenerationTasks(limit = 30, options?: { projectId?: st
                 )) ?? [],
         }));
     const backendTasks = await collectGenerationTaskPages(backendPageReader, baseRequest, boundedLimit, signal);
+    assertUserScope(expected);
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    backendTasks.forEach(task => publishTaskReferenceProgress(task, expected, observationRequest));
     return backendTasks
         .filter((task) => !options?.projectId || task.projectId === options.projectId)
         .filter((task) => !options?.activeOnly || task.status === "queued" || task.status === "running")
@@ -201,7 +231,14 @@ async function collectGenerationTaskPages<T>(readPage: (request: GenerationTaskP
 }
 
 export function queryGenerationTask(id: string, options?: { signal?: AbortSignal; expectedScope?: CapturedUserScope }) {
-    return http.get<GenerationTask>(`/tasks/${encodeURIComponent(id)}`, { signal: options?.signal, expectedScope: options?.expectedScope });
+    const expected = options?.expectedScope ?? captureUserScope();
+    const observationRequest = beginTaskReferenceObservation();
+    return http.get<GenerationTask>(`/tasks/${encodeURIComponent(id)}`, { signal: options?.signal, expectedScope: expected }).then(task => {
+        assertUserScope(expected);
+        if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        publishTaskReferenceProgress(task, expected, observationRequest);
+        return task;
+    });
 }
 
 type GenerationTaskSubscriptionDependencies = {
@@ -301,8 +338,8 @@ export function retryGenerationTask(id: string) {
     return http.post<GenerationTask>(`/tasks/${encodeURIComponent(id)}/retry`);
 }
 
-export function cancelGenerationTask(id: string) {
-    return http.post<GenerationTask>(`/tasks/${encodeURIComponent(id)}/cancel`).then((task) => {
+export function cancelGenerationTask(id: string, expectedScope = captureUserScope()) {
+    return http.post<GenerationTask>(`/tasks/${encodeURIComponent(id)}/cancel`, undefined, { expectedScope }).then((task) => {
         window.dispatchEvent(new CustomEvent("canvas:task-cancelled", { detail: { task } }));
         return task;
     });
@@ -390,6 +427,9 @@ export async function waitForGenerationTask(id: string, options?: WaitForGenerat
     let lastTask = options?.initialTask;
     let lastQueryError: unknown;
     let consecutiveFailures = 0;
+    // Only the progress this waiter published is cleared on exit, so a second
+    // waiter for the same task keeps its own view.
+    let publishedDelivery = false;
     try {
         while (Date.now() - startedAt < (options?.timeoutMs || taskWaitTimeoutMs(lastTask))) {
             if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
@@ -413,13 +453,24 @@ export async function waitForGenerationTask(id: string, options?: WaitForGenerat
                 await delay(intervalMs, options?.signal);
                 continue;
             }
+            if (task.status === "queued" || task.status === "running") {
+                const progress = task.delivery?.outputs[0];
+                if (progress) {
+                    publishGenerationDeliveryProgress(id, progress);
+                    publishedDelivery = true;
+                } else if (publishedDelivery) {
+                    publishGenerationDeliveryProgress(id, undefined);
+                    publishedDelivery = false;
+                }
+            }
             if (task.status === "succeeded") {
                 return task;
             }
             if (task.status === "failed" || task.status === "cancelled") {
                 throw new Error(task.error ? generationErrorMessage(task.error) : `任务${task.status === "cancelled" ? "已取消" : "失败"}`);
             }
-            await delay(intervalMs, options?.signal);
+            const retrieving = Boolean(task.delivery) || task.stage === GENERATION_RESULT_FETCH_STAGE;
+            await delay(retrieving ? Math.min(intervalMs, 500) : intervalMs, options?.signal);
         }
     } catch (error) {
         if (options?.signal?.aborted) {
@@ -427,6 +478,8 @@ export async function waitForGenerationTask(id: string, options?: WaitForGenerat
             throw new DOMException("Aborted", "AbortError");
         }
         throw error;
+    } finally {
+        if (publishedDelivery) publishGenerationDeliveryProgress(id, undefined);
     }
     throw new Error(lastQueryError instanceof Error ? `任务状态同步失败：${lastQueryError.message}` : "任务执行超时，请稍后重试");
 }
@@ -568,6 +621,7 @@ async function taskTextStreamHTTPError(response: Response) {
 
 function taskWaitTimeoutMs(task?: GenerationTask) {
     const type = task?.type || "";
+    if (type === "depth_capture") return 122 * 60 * 1000;
     if (type.includes("storyboard")) return 13 * 60 * 1000;
     if (type.includes("video")) return 32 * 60 * 1000;
     if (type.includes("image")) return 10 * 60 * 1000;

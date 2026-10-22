@@ -1,6 +1,7 @@
 import { localAssetToInsertPayload } from "@/components/canvas/asset-picker-modal";
 import { isCanvasNodeGenerating } from "@/lib/canvas/canvas-node-task-state";
 import { CanvasAssistantSidebar } from "./canvas-assistant-sidebar";
+import { useCanvasAssistantContinuation } from "./use-canvas-assistant-continuation";
 import { highlightAssistantNodes } from "./canvas-assistant-highlight";
 import { resolveCanvasRightPanel, useCanvasAssistant, useCanvasAssistantDockable } from "./use-canvas-assistant";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -8,9 +9,9 @@ import type { Dispatch, MouseEvent as ReactMouseEvent, SetStateAction } from "re
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { appHref } from "@/lib/app-routing";
 import { isLocalWorkspaceMode } from "@/services/workspace-mode";
+import { queryGenerationTask } from "@/services/api/task-center";
 import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { uploadMediaFile } from "@/services/file-storage";
-import { createCanvasGenerationLiveProjectAdapter, registerCanvasGenerationLiveProject } from "@/services/canvas-generation-consumer";
 import { getActiveUserScope, scopedLocalStorage } from "@/lib/user-scope";
 import { assertUserScope, captureUserScope, userScopeMatches, type CapturedUserScope } from "@/lib/user-scope-guard";
 import { findWorkspaceAssetIdByStorageKey } from "@/lib/canvas/director/director-library-persist";
@@ -37,6 +38,7 @@ import { useUserStore } from "@/stores/use-user-store";
 import { App, Button } from "antd";
 import { ArrowLeftRight } from "lucide-react";
 import { AppModal } from "@/components/ui/product/app-modal";
+import { CanvasDeleteConfirmation } from "@/components/canvas/canvas-delete-confirmation";
 import { CanvasConfigComposer } from "@/components/canvas/canvas-config-composer";
 import { CanvasConfigNodePanel } from "@/components/canvas/canvas-config-node-panel";
 import { CanvasActiveTaskPanel } from "@/components/canvas/canvas-active-task-panel";
@@ -104,6 +106,7 @@ import type { CanvasImageEmotionPayload } from "@/components/canvas/canvas-node-
 import { CanvasEmotionWorkspace } from "@/components/canvas/canvas-emotion-workspace";
 import { removeCanvasDrawing } from "@/lib/canvas/canvas-drawing-storage";
 import { persistCanvasTimeline, refreshLocalCanvasProjectIfChanged } from "@/services/local-workspace-repository";
+import { CanvasUploadModal } from "@/components/canvas/canvas-upload-modal";
 import { syncLocalCanvasSnapshot } from "@/services/local-workspace-sync";
 import { useCanvasConnectionController } from "./use-canvas-connection-controller";
 import { useCanvasActiveTasks } from "./use-canvas-active-tasks";
@@ -364,15 +367,6 @@ function InfiniteCanvasPage() {
     const activeChatIdRef = useRef(activeChatId);
     const selectedNodeIdsRef = useRef(selectedNodeIds);
     const viewportRef = useRef(viewport);
-
-    useEffect(() => {
-        if (!projectId) return;
-        return registerCanvasGenerationLiveProject({
-            scope: canvasStorageScope,
-            projectId,
-            adapter: createCanvasGenerationLiveProjectAdapter({ nodesRef, connectionsRef, chatSessionsRef, activeChatIdRef, setNodes, setConnections, setChatSessions, setActiveChatId }),
-        });
-    }, [canvasStorageScope, projectId]);
 
     const resolvedCanvasAppearance = useMemo(() => resolveCanvasAppearance(canvasAppearance, colorTheme), [canvasAppearance, colorTheme]);
     const applyCanvasAppearance = useCallback(
@@ -703,17 +697,8 @@ function InfiniteCanvasPage() {
         message.success("画布副本已创建");
     }, [canvasProjects, importCanvasProject, message, projectId]);
 
-    const deleteCanvasFromMenu = useCallback((canvasId: string) => {
-        const canvasTitle = canvasProjects.find((canvas) => canvas.id === canvasId)?.title || "该画布";
-        void (async () => {
-            if (canvasId === projectId) {
-                await deleteCurrentProject();
-                return;
-            }
-            await deleteWorkspaceCanvasProjects([canvasId]);
-            message.success(`「${canvasTitle}」已移入回收站`);
-        })().catch((error) => message.error(error instanceof Error ? `删除画布失败：${error.message}` : "删除画布失败"));
-    }, [canvasProjects, deleteCurrentProject, message, modal, projectId]);
+    const [deletingCanvas, setDeletingCanvas] = useState<{ id: string; scope: CapturedUserScope } | null>(null);
+    const deleteCanvasFromMenu = useCallback((id: string) => setDeletingCanvas({ id, scope: captureUserScope() }), []);
 
     const versions = useCanvasVersionHistory(projectId, restoreCanvasProjectVersion, currentProject);
     // 画布右侧只有一个栏位：助手和版本记录互斥，谁被打开另一个就让位。
@@ -990,6 +975,7 @@ function InfiniteCanvasPage() {
         getCanvasCenter,
     });
 
+    const assistantContinuation = useCanvasAssistantContinuation(assistant, nodes, !readOnly);
     const { runAssistantProposal, assistantProposalFeedback, runningProposalIds } = useCanvasAssistantProposal({
         projectId,
         addedSkills,
@@ -997,11 +983,17 @@ function InfiniteCanvasPage() {
         connectionsRef,
         handledProposals: assistant.handledProposals,
         markProposalHandled: assistant.markProposalHandled,
+        continuationSessionId: assistant.sessionId,
+        continuePlan: Boolean(assistant.plan?.items.some(item => item.status !== "done")),
+        onContinuationArmed: assistantContinuation.refresh,
         handleGenerateNode,
     });
 
     const {
         assetPickerOpen,
+        uploadModalOpen,
+        closeUploadModal,
+        handleImportUrl,
         closeAssetPicker,
         createVideoNodeFromBlob,
         createAssetPayloadNodes,
@@ -1054,6 +1046,8 @@ function InfiniteCanvasPage() {
         getCanvasCenter,
         createHandoffNodes: createAssetPayloadNodes,
         applyGenerationTaskResult,
+        startGenerationRequest,
+        finishGenerationRequest,
     });
     const canvasContext = useMemo(() => summarizeCanvasContext(nodes, selectedNodeIds, linkedProjectQuery.data?.units), [linkedProjectQuery.data?.units, nodes, selectedNodeIds]);
     const directorReferenceTargetRef = useRef<{ projectId: string; nodeId: string | null; scope: string } | null>(null);
@@ -1825,6 +1819,32 @@ function InfiniteCanvasPage() {
         updateProject,
     });
 
+    useEffect(() => {
+        const starter = searchParams.get("start");
+        if (!projectLoaded || (starter !== "director" && starter !== "agent")) return;
+
+        let frame = 0;
+        const startWhenCanvasIsLaidOut = () => {
+            const rect = containerRef.current?.getBoundingClientRect();
+            if (!rect || rect.width <= 0 || rect.height <= 0) {
+                frame = requestAnimationFrame(startWhenCanvasIsLaidOut);
+                return;
+            }
+
+            if (starter === "director" && !nodesRef.current.some((node) => node.type === CanvasNodeType.Director)) {
+                createDirectorShot();
+            } else if (starter === "agent") {
+                openAssistant();
+            }
+
+            const next = new URLSearchParams(searchParams);
+            next.delete("start");
+            setSearchParams(next, { replace: true });
+        };
+        frame = requestAnimationFrame(startWhenCanvasIsLaidOut);
+        return () => cancelAnimationFrame(frame);
+    }, [containerRef, createDirectorShot, nodesRef, openAssistant, projectLoaded, searchParams, setSearchParams]);
+
     const {
         activateStep: activateShortDramaStep,
         createPipeline: createShortDramaPipeline,
@@ -2121,6 +2141,7 @@ function InfiniteCanvasPage() {
             if (panelNode.type === CanvasNodeType.Script || panelNode.type === CanvasNodeType.Drawing) return null;
             return panelNode.type === CanvasNodeType.Config ? (
                 <CanvasConfigComposer
+                    model={panelNode.metadata?.model || config.videoModel}
                     value={panelNode.metadata?.composerContent ?? panelNode.metadata?.prompt ?? ""}
                     inputs={configInputsById.get(panelNode.id) || []}
                     skillReferences={skillMentionReferences}
@@ -2358,6 +2379,10 @@ function InfiniteCanvasPage() {
     const retryCanvasNode = useCallback(
         (node: CanvasNodeData) => {
             const plan = canvasNodeRetryPlan(node, nodesRef.current);
+            if (plan.kind === "history") {
+                setGenerationHistoryOpen(true);
+                return;
+            }
             if (plan.kind === "depth") {
                 void retryDepthCaptureNode(node);
                 return;
@@ -2385,7 +2410,7 @@ function InfiniteCanvasPage() {
             }
             void handleRetryNode(node);
         },
-        [generateScriptRows, handleRetryNode, message, nodesRef, reconcileImageBatchRootNode, retryDepthCaptureNode, retryImageBatchChildren],
+        [generateScriptRows, handleRetryNode, message, nodesRef, reconcileImageBatchRootNode, retryDepthCaptureNode, retryImageBatchChildren, setGenerationHistoryOpen],
     );
 
     // 改动卡片的「在画布上查看」：选中这些节点并把视野带过去，再点亮一下。
@@ -2412,6 +2437,59 @@ function InfiniteCanvasPage() {
             void openNodeTaskDetails(node);
         },
         [openNodeTaskDetails],
+    );
+    const activeTasksRef = useRef(activeTasks);
+    activeTasksRef.current = activeTasks;
+    const handleCancelNodeTask = useCallback(
+        async (node: CanvasNodeData) => {
+            const taskId = node.metadata?.taskId;
+            if (!taskId) return;
+            const scope = captureUserScope();
+            try {
+                const task = activeTasksRef.current.find((item) => item.id === taskId) ?? (await queryGenerationTask(taskId));
+                assertUserScope(scope);
+                cancelCanvasTask(task);
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : "读取任务失败");
+            }
+        },
+        [cancelCanvasTask, message],
+    );
+    const handleConnectionSelect = useCallback(
+        (connectionId: string) => {
+            setSelectedConnectionId(connectionId);
+            selectedNodeIdsRef.current = new Set();
+            setSelectedNodeIds(new Set());
+            setContextMenu(null);
+        },
+        [selectedNodeIdsRef, setContextMenu, setSelectedConnectionId, setSelectedNodeIds],
+    );
+    const handleConnectionContextMenu = useCallback(
+        (event: ReactMouseEvent<SVGPathElement>, connectionId: string) => {
+            setSelectedConnectionId(connectionId);
+            selectedNodeIdsRef.current = new Set();
+            setSelectedNodeIds(new Set());
+            closeConnectionCreateMenu();
+            setContextMenu({ type: "connection", x: event.clientX, y: event.clientY, connectionId });
+        },
+        [closeConnectionCreateMenu, selectedNodeIdsRef, setContextMenu, setSelectedConnectionId, setSelectedNodeIds],
+    );
+    const handleCancelImageCrop = useCallback(() => setCropNodeId(null), [setCropNodeId]);
+    const handleConfirmImageCrop = useCallback((node: CanvasNodeData, crop: Parameters<typeof cropImageNode>[1]) => cropImageNode(node, crop), [cropImageNode]);
+    const handleCancelAnnotation = useCallback(() => setAnnotationNodeId(null), [setAnnotationNodeId]);
+    const handleConfirmAnnotation = useCallback(
+        async (node: CanvasNodeData, dataUrl: string) => {
+            await saveAnnotatedImageNode(node, dataUrl);
+            setAnnotationNodeId(null);
+        },
+        [saveAnnotatedImageNode, setAnnotationNodeId],
+    );
+    const handleCancelMaskEdit = useCallback(() => setMaskEditNodeId(null), [setMaskEditNodeId]);
+    const handleConfirmMaskEdit = useCallback((node: CanvasNodeData, payload: Parameters<typeof maskEditImageNode>[1]) => maskEditImageNode(node, payload), [maskEditImageNode]);
+    const handleCancelVideoCrop = useCallback(() => setVideoCropNodeId(null), [setVideoCropNodeId]);
+    const handleConfirmVideoCrop = useCallback(
+        (node: CanvasNodeData, crop: Parameters<typeof cropVideoNode>[1], sourceDimensions: Parameters<typeof cropVideoNode>[2]) => cropVideoNode(node, crop, sourceDimensions),
+        [cropVideoNode],
     );
     const openCanvasNodeVersions = useCallback((node: CanvasNodeData) => setVersionCompareRootId(node.metadata?.versionOfNodeId || node.id), []);
     const viewCanvasNodeImage = useCallback((node: CanvasNodeData) => setPreviewNodeId(node.id), []);
@@ -2494,6 +2572,14 @@ function InfiniteCanvasPage() {
 
     return (
         <>
+            {deletingCanvas ? <CanvasDeleteConfirmation scope={deletingCanvas.scope} title="删除画布？"
+                description={`将删除「${canvasProjects.find((canvas) => canvas.id === deletingCanvas.id)?.title || "该画布"}」，里面的节点和连线也会一起移除。`}
+                onCancel={() => setDeletingCanvas(null)} onConfirm={async (assertCurrent) => {
+                    if (deletingCanvas.id === projectId) await deleteCurrentProject();
+                    else await deleteWorkspaceCanvasProjects([deletingCanvas.id]);
+                    assertCurrent();
+                    message.success("画布已删除");
+                }} /> : null}
             <a
                 href="#canvas-main"
                 onClick={(event) => {
@@ -2555,7 +2641,7 @@ function InfiniteCanvasPage() {
                                 onRenameCanvas={renameCanvasFromMenu}
                                 onDuplicateCanvas={duplicateCanvasFromMenu}
                                 onDeleteCanvas={deleteCanvasFromMenu}
-                                onDeleteProject={deleteCurrentProject}
+                                onDeleteProject={() => deleteCanvasFromMenu(projectId)}
                                 onSave={() => void saveCanvasProject()}
                                 onForceSave={confirmForceSaveCanvas}
                                 localOnly={localOnly}
@@ -2664,19 +2750,8 @@ function InfiniteCanvasPage() {
                                                 batchConnectionPreview={batchConnectionPreview}
                                                 selectionBoundsElementRef={selectionBoundsElementRef}
                                                 renderCanvasNodeContent={renderCanvasNodeContent}
-                                                onConnectionSelect={(connectionId) => {
-                                                    setSelectedConnectionId(connectionId);
-                                                    selectedNodeIdsRef.current = new Set();
-                                                    setSelectedNodeIds(new Set());
-                                                    setContextMenu(null);
-                                                }}
-                                                onConnectionContextMenu={(event, connectionId) => {
-                                                    setSelectedConnectionId(connectionId);
-                                                    selectedNodeIdsRef.current = new Set();
-                                                    setSelectedNodeIds(new Set());
-                                                    closeConnectionCreateMenu();
-                                                    setContextMenu({ type: "connection", x: event.clientX, y: event.clientY, connectionId });
-                                                }}
+                                                onConnectionSelect={handleConnectionSelect}
+                                                onConnectionContextMenu={handleConnectionContextMenu}
                                                 onNodeMouseDown={handleNodeMouseDown}
                                                 onNodeHoverStart={handleCanvasNodeHoverStart}
                                                 onNodeHoverEnd={handleCanvasNodeHoverEnd}
@@ -2693,10 +2768,7 @@ function InfiniteCanvasPage() {
                                                 onRetry={retryCanvasNode}
                                                 onReloadResource={reloadCanvasNodeResource}
                                                 onOpenTaskDetails={openCanvasNodeTaskDetails}
-                                                onCancelTask={(node) => {
-                                                    const task = activeTasks.find((item) => item.id === node.metadata?.taskId);
-                                                    if (task) cancelCanvasTask(task);
-                                                }}
+                                                onCancelTask={handleCancelNodeTask}
                                                 onOpenVersions={openCanvasNodeVersions}
                                                 onViewImage={viewCanvasNodeImage}
                                                 onReplaceMedia={replaceCanvasNodeMedia}
@@ -2704,18 +2776,18 @@ function InfiniteCanvasPage() {
                                                 onOpenDrawing={openDrawingNode}
                                                 onStartBatchConnection={startBatchConnection}
                                                 imageCropNodeId={cropNodeId}
-                                                onCancelImageCrop={() => setCropNodeId(null)}
-                                                onConfirmImageCrop={(node, crop) => cropImageNode(node, crop)}
+                                                onCancelImageCrop={handleCancelImageCrop}
+                                                onConfirmImageCrop={handleConfirmImageCrop}
                                                 annotationNodeId={annotationNodeId}
-                                                onCancelAnnotation={() => setAnnotationNodeId(null)}
-                                                onConfirmAnnotation={async (node, dataUrl) => { await saveAnnotatedImageNode(node, dataUrl); setAnnotationNodeId(null); }}
+                                                onCancelAnnotation={handleCancelAnnotation}
+                                                onConfirmAnnotation={handleConfirmAnnotation}
                                                 maskEditNodeId={maskEditNodeId}
                                                 maskEditConfig={maskEditNode ? { ...effectiveConfig, model: maskEditNode.metadata?.model || effectiveConfig.model, imageModel: maskEditNode.metadata?.model || effectiveConfig.imageModel, size: maskEditNode.metadata?.size || effectiveConfig.size, quality: maskEditNode.metadata?.quality || effectiveConfig.quality, count: String(maskEditNode.metadata?.count || effectiveConfig.count) } : effectiveConfig}
-                                                onCancelMaskEdit={() => setMaskEditNodeId(null)}
-                                                onConfirmMaskEdit={(node, payload) => maskEditImageNode(node, payload)}
+                                                onCancelMaskEdit={handleCancelMaskEdit}
+                                                onConfirmMaskEdit={handleConfirmMaskEdit}
                                                 videoCropNodeId={videoCropNodeId}
-                                                onCancelVideoCrop={() => setVideoCropNodeId(null)}
-                                                onConfirmVideoCrop={(node, crop, sourceDimensions) => cropVideoNode(node, crop, sourceDimensions)}
+                                                onCancelVideoCrop={handleCancelVideoCrop}
+                                                onConfirmVideoCrop={handleConfirmVideoCrop}
                                             />
                                         </CanvasNodeGraphContext.Provider>
                                     </CanvasNodeActionContext.Provider>
@@ -3086,6 +3158,7 @@ function InfiniteCanvasPage() {
                             onDeleteSelection={() => deleteNodes(selectedNodeIds)}
                         />
 
+                        <CanvasUploadModal open={uploadModalOpen} onClose={closeUploadModal} onUpload={handleUploadFiles} onImportUrl={handleImportUrl} />
                         <input ref={imageInputRef} type="file" accept="image/*,video/*,.mp4,.mov,.m4v,audio/mpeg,audio/wav,audio/x-wav,.mp3,.wav,.txt,.md,.markdown" multiple className="hidden" onChange={handleImageInputChange} />
 
                         <CanvasProjectEditorDialogs
@@ -3247,7 +3320,7 @@ function InfiniteCanvasPage() {
                                     setNodes((prev) =>
                                         prev.map((node) =>
                                             node.id === activeScriptNode.id
-                                                ? { ...node, metadata: { ...node.metadata, storyboard: { rows: node.metadata?.storyboard?.rows || [], visibleColumns, referenceNodeIds: node.metadata?.storyboard?.referenceNodeIds || [] } } }
+                                                ? { ...node, metadata: { ...node.metadata, storyboardVisibleColumnsCustomized: true, storyboard: { rows: node.metadata?.storyboard?.rows || [], visibleColumns, referenceNodeIds: node.metadata?.storyboard?.referenceNodeIds || [] } } }
                                                 : node,
                                         ),
                                     );
@@ -3337,6 +3410,8 @@ function InfiniteCanvasPage() {
                         proposalFeedback={assistantProposalFeedback}
                         runningProposalIds={runningProposalIds}
                         assistant={assistant}
+                        continuation={assistantContinuation}
+                        nodes={nodes}
                         canvasTitle={workspaceProject?.title === "未命名项目" || !workspaceProject?.title ? "未命名工作区" : workspaceProject.title}
                         dockable={assistantDockable}
                         readOnly={readOnly}

@@ -2,16 +2,33 @@ import { type AxiosError, type AxiosRequestConfig } from "axios";
 
 import { appPathnameFrom } from "@/lib/app-routing";
 import { apiClient } from "@/services/api/request";
+import { browserCapabilities } from "./browser-environment";
 
 export type ClientDiagnosticLevel = "info" | "warning" | "error";
-export type ClientDiagnosticCategory = "navigation" | "action" | "request" | "runtime" | "task" | "plugin";
+export type ClientDiagnosticCategory = "navigation" | "action" | "request" | "runtime" | "task" | "plugin" | "environment";
+
+export type CanvasBindingEvidence = {
+    source: "client" | "server";
+    nodeId?: string;
+    clientOperationId?: string;
+    nodeTaskId?: string;
+    nodeClientOperationId?: string;
+    nodeType?: string;
+    nodeStatus?: string;
+    revision?: number;
+    outputIndex?: number;
+    nodePresent?: boolean;
+    nodeHasMedia?: boolean;
+};
 
 export type ClientDiagnosticEvent = {
+    canvasBinding?: CanvasBindingEvidence;
     id: string;
     timestamp: string;
     level: ClientDiagnosticLevel;
     category: ClientDiagnosticCategory;
     code?: string;
+    reason?: string;
     message: string;
     route?: string;
     durationMs?: number;
@@ -78,6 +95,7 @@ export function initializeClientDiagnostics() {
                 level: status >= 400 || businessCode !== 0 ? "error" : "info",
                 category: "request",
                 code: businessCode !== 0 ? String(businessCode) : undefined,
+                reason: response.data?.reason,
                 message: String(config.method || "GET").toUpperCase() + " " + route,
                 route,
                 durationMs: meta ? Math.max(0, Math.round(performance.now() - meta.startedAt)) : undefined,
@@ -91,12 +109,13 @@ export function initializeClientDiagnostics() {
             const config = error.config;
             const meta = config ? requestMeta.get(config) : undefined;
             const response = error.response;
-            const body = response?.data && typeof response.data === "object" ? (response.data as { code?: number; msg?: string }) : undefined;
+            const body = response?.data && typeof response.data === "object" ? (response.data as { code?: number; msg?: string; reason?: string }) : undefined;
             const route = appPathnameFrom(config?.url);
             recordDiagnosticEvent({
                 level: "error",
                 category: "request",
                 code: body?.code !== undefined ? String(body.code) : response?.status ? "HTTP_" + response.status : "NETWORK_ERROR",
+                reason: body?.reason,
                 message: body?.msg || String(config?.method || "GET").toUpperCase() + " " + route + " 请求失败",
                 route,
                 durationMs: meta ? Math.max(0, Math.round(performance.now() - meta.startedAt)) : undefined,
@@ -124,6 +143,7 @@ export function recordDiagnosticEvent(input: DiagnosticEventInput) {
         level: input.level,
         category: input.category,
         code: redactClientText(input.code),
+        reason: safeDiagnosticId(input.reason),
         message: redactClientText(input.message) || "未命名诊断事件",
         route: appPathnameFrom(input.route),
         durationMs: input.durationMs === undefined ? undefined : clampNumber(input.durationMs, 0, 86_400_000),
@@ -133,10 +153,15 @@ export function recordDiagnosticEvent(input: DiagnosticEventInput) {
         taskId: safeDiagnosticId(input.taskId),
         projectId: safeDiagnosticId(input.projectId),
         canvasId: safeDiagnosticId(input.canvasId),
+        canvasBinding: sanitizeCanvasBindingEvidence(input.canvasBinding),
         stack: redactClientText(input.stack, 4000),
     };
     events.push(event);
-    if (events.length > maxEvents) events.splice(0, events.length - maxEvents);
+    while (events.length > maxEvents) {
+        const routineRequestIndex = events.findIndex((item) => item.category === "request" && item.level === "info");
+        if (routineRequestIndex >= 0) events.splice(routineRequestIndex, 1);
+        else events.shift();
+    }
 }
 
 export function getClientDiagnosticEvents(range?: { from?: Date; to?: Date }) {
@@ -157,6 +182,7 @@ export function getDiagnosticRuntime() {
         browser: typeof navigator !== "undefined" ? navigator.userAgent : "",
         os: typeof navigator !== "undefined" ? navigator.platform : "",
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "",
+        capabilities: browserCapabilities(),
     };
 }
 
@@ -181,6 +207,23 @@ function readHeader(headers: unknown, key: string) {
 function safeDiagnosticId(value?: string) {
     const normalized = String(value || "").trim();
     return /^[A-Za-z0-9._:-]{1,96}$/.test(normalized) ? normalized : undefined;
+}
+
+export function sanitizeCanvasBindingEvidence(value: unknown): CanvasBindingEvidence | undefined {
+    if (!value || typeof value !== "object") return undefined;
+    const input = value as Record<string, unknown>;
+    if (input.source !== "client" && input.source !== "server") return undefined;
+    const operationId = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9:_-]{1,128}$/.test(value) ? value : undefined;
+    const id = (value: unknown) => typeof value === "string" ? safeDiagnosticId(value) : undefined;
+    return {
+        source: input.source, nodeId: id(input.nodeId), nodeTaskId: id(input.nodeTaskId),
+        clientOperationId: operationId(input.clientOperationId), nodeClientOperationId: operationId(input.nodeClientOperationId),
+        nodeType: id(input.nodeType), nodeStatus: id(input.nodeStatus),
+        revision: typeof input.revision === "number" && Number.isSafeInteger(input.revision) && input.revision >= 0 ? input.revision : undefined,
+        outputIndex: typeof input.outputIndex === "number" ? clampNumber(input.outputIndex, 0, 999) : undefined,
+        nodePresent: typeof input.nodePresent === "boolean" ? input.nodePresent : undefined,
+        nodeHasMedia: typeof input.nodeHasMedia === "boolean" ? input.nodeHasMedia : undefined,
+    };
 }
 
 function redactClientText(value?: string, maxLength = 1200) {

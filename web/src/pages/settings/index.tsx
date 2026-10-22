@@ -1,6 +1,6 @@
 import { App, Button } from "antd";
-import { ArrowLeft, Bug, RadioTower } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import { ArrowLeft } from "lucide-react";
+import { useEffect, useLayoutEffect, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 
 import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
@@ -8,16 +8,16 @@ import { useUserStore } from "@/stores/use-user-store";
 import { ChannelSettingsPane, channelValidationError, focusInvalidChannelField, isChannelReady } from "./channel-settings-pane";
 import { ModelDefaultGrid } from "./model-default-grid";
 import DiagnosticsPanel from "./diagnostics-panel";
+import { StorageSettingsPane } from "./storage-settings-pane";
+import { DepthComponentsPanel } from "@/components/depth-components-panel";
+import { ReferenceStoragePane } from "./reference-storage-pane";
+import { getDesktopAppBinding } from "@/services/desktop-runtime";
+import { PageHeader } from "@/components/layout/workspace-page";
 
-type ConfigSectionKey = "channels" | "models" | "diagnostics";
-
-const configSections: Array<{ key: ConfigSectionKey; label: string; description: string; icon: ReactNode }> = [
-    { key: "channels", label: "个人渠道", description: "模型服务与个人工作流", icon: <RadioTower className="size-4" /> },
-    { key: "diagnostics", label: "问题诊断", description: "导出问题记录", icon: <Bug className="size-4" /> },
-];
+type ConfigSectionKey = "channels" | "models" | "storage" | "diagnostics";
 
 export function isConfigSection(value: string | null): value is ConfigSectionKey {
-    return configSections.some((section) => section.key === value);
+    return value === "channels" || value === "storage" || value === "diagnostics";
 }
 
 export default function SettingsPage() {
@@ -33,22 +33,15 @@ export default function SettingsPage() {
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const shouldPromptContinue = searchParams.get("continue") === "1";
     const userChannels = config.channels.filter((channel) => channel.scope !== "system");
-    const visibleConfigSections = useMemo(() => customChannelsEnabled ? configSections : configSections.filter((section) => section.key !== "channels"), [customChannelsEnabled]);
-
-    const isVisibleConfigSection = (value: string | null): value is ConfigSectionKey => isConfigSection(value) && visibleConfigSections.some((section) => section.key === value);
-
+    const nativeStorage = Boolean(getDesktopAppBinding()?.StorageSettings);
     useLayoutEffect(() => {
         document.body.classList.add("app-user-overlays");
         return () => document.body.classList.remove("app-user-overlays");
     }, []);
 
     useEffect(() => {
-        if (isVisibleConfigSection(requestedSection)) {
-            setActiveTab(requestedSection);
-            return;
-        }
-        setActiveTab((current) => visibleConfigSections.some((section) => section.key === current) ? current : "channels");
-    }, [customChannelsEnabled, requestedSection, visibleConfigSections]);
+        setActiveTab(isConfigSection(requestedSection) && (requestedSection !== "storage" || nativeStorage) ? requestedSection : "channels");
+    }, [requestedSection, nativeStorage]);
 
     const selectSection = (section: ConfigSectionKey) => {
         setActiveTab(section);
@@ -85,6 +78,19 @@ export default function SettingsPage() {
                         </div>
                     </div>
                     <ModelDefaultGrid config={effectiveConfig} onChange={(key, model) => updateConfig(key, model)} />
+                </div>
+            </SettingsPane>
+        ),
+        storage: (
+            <SettingsPane>
+                <PageHeader title="存储设置" />
+                <div className="storage-settings-sections">
+                    <StorageSettingsPane />
+                    <ReferenceStoragePane />
+                    <section className="settings-section storage-settings-block space-y-4" aria-label="深度捕捉组件">
+                        <div className="settings-pane-header"><h2>深度捕捉组件</h2></div>
+                        <DepthComponentsPanel />
+                    </section>
                 </div>
             </SettingsPane>
         ),

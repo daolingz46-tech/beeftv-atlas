@@ -17,6 +17,10 @@ BeefTV 是一个本地优先、轻量、AI Native 的视频工作台。本页只
 - [模型配置持久化](local-model-config-persistence.md)
 - [桌面账号与钱包](content/docs/backend/desktop-account.mdx)
 - [模型服务商验证](model-provider-validation.md)
+- [Midjourney 固定四张输出与恢复](refactor/midjourney-fixed-output-20261017.md)
+- [MiniMax H3 Max Turbo 接入与验收](fal-h3-max-turbo.md)
+- [MiniMax H3 三款模型与多素材参考](fal-h3-family.md)
+- [H3 完整生成、Styles 与 Director 续接边界](fal-h3-full-capabilities.md)
 
 ## 开发参考
 
@@ -25,10 +29,12 @@ BeefTV 是一个本地优先、轻量、AI Native 的视频工作台。本页只
 - [Agent 的本地 MCP 接入](../tools/beeftv-mcp/README.md)
 - [代码地图](content/docs/backend/code-map.mdx)
 - [官方 Pi SDK 复用矩阵](refactor/pi-official-reuse.md)
+- [Skill 市场 Agent 接口与前端交接](refactor/skill-market-agent-access.md)
+- [Skill 市场 Windows 与原生宿主验收](refactor/skill-market-agent-access-verification.md)
+- [内置助手一次确认制作的实现与验收](refactor/assistant-production-delivery-20261019.md)
 - [后端数据库](content/docs/backend/backend-database.mdx)
 - [任务运行时稳定性](content/docs/backend/task-runtime-stability.mdx)
 - [生成失败归类](content/docs/backend/generation-errors.mdx)
-- [系统更新](content/docs/backend/system-update.mdx)
 - [插件系统](content/docs/plugins/plugin-system.mdx)
 - [插件界面扩展](content/docs/plugins/plugin-surfaces.mdx)
 - [AI 审美批改插件](content/docs/plugins/ai-art-critique.mdx)
@@ -40,4 +46,6 @@ BeefTV 是一个本地优先、轻量、AI Native 的视频工作台。本页只
 - [贡献指南](../CONTRIBUTING.md)
 - [安全策略](../SECURITY.md)
 - [项目许可](../LICENSE)
+- [许可范围与使用场景](content/docs/overview/licensing.mdx)
 - [第三方声明](../THIRD_PARTY_NOTICES.md)
+- [媒体组件的许可与源码交付](media-source-distribution.md)

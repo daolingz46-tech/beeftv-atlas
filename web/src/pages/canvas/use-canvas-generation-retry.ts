@@ -1,9 +1,11 @@
-import { useCallback, type Dispatch, type SetStateAction } from "react";
+import { createClientId } from "@/lib/client-id";
+import { useCallback, useRef, type Dispatch, type SetStateAction } from "react";
 import { App } from "antd";
 
 import { buildNodeGenerationContext, hydrateNodeGenerationContext } from "@/components/canvas/canvas-node-generation";
 import type { CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-prompt-panel";
 import { buildEmotionImageArtifacts, emotionGenerationSize, emotionProviderMask, normalizeEmotionPromptForProvider, resolveEmotionEditPlan } from "@/lib/canvas/canvas-emotion";
+import { captureUserScope, userScopeMatches } from "@/lib/user-scope-guard";
 import {
     buildAudioGenerationMetadata,
     buildGenerationConfig,
@@ -25,7 +27,7 @@ import { isCanvasWorkflowProvider } from "@/lib/canvas/canvas-workflow";
 import { isDepthCaptureResultNode } from "@/lib/canvas/canvas-depth-capture";
 import { buildPortraitTexturePrompt } from "@/lib/canvas/canvas-portrait-texture";
 import { resolveCanvasStyleExecution } from "@/lib/canvas/canvas-style-execution";
-import { generationFailureMetadata, shouldBlockAutomaticRetry } from "@/lib/generation-error";
+import { generationFailureMetadata, shouldBlockManualRetry } from "@/lib/generation-error";
 import { modelCapabilityConfigFor } from "@/lib/model-capabilities";
 import { navigateToSettings } from "@/lib/settings-navigation";
 import type { Skill } from "@/services/api/skills";
@@ -50,6 +52,7 @@ type UseCanvasGenerationRetryOptions = {
     finishGenerationRequest: (targetNodeId: string, controller: AbortController) => void;
     bindGenerationTask: (targetNodeId: string, task: GenerationTask) => void;
     applyGenerationTaskResult: (targetNodeId: string, task: GenerationTask) => Promise<void>;
+    regenerateImageBatch: (nodeId: string, prompt: string) => Promise<void>;
 };
 
 const NODE_STATUS_LOADING = "loading" as const;
@@ -69,10 +72,13 @@ export function useCanvasGenerationRetry({
     finishGenerationRequest,
     bindGenerationTask,
     applyGenerationTaskResult,
+    regenerateImageBatch,
 }: UseCanvasGenerationRetryOptions) {
     const { message } = App.useApp();
     const effectiveConfig = useEffectiveConfig();
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
+    const projectIdRef = useRef(projectId);
+    projectIdRef.current = projectId;
 
     return useCallback(
         async (node: CanvasNodeData) => {
@@ -111,6 +117,10 @@ export function useCanvasGenerationRetry({
             }
 
             const retryPromptSource = sourceNode.metadata?.composerContent || sourceNode.metadata?.prompt || node.metadata?.prompt || "";
+            if (retryMode === "image" && modelCapabilityConfigFor(generationConfig, generationConfig.model).image?.fixedOutputs) {
+                await regenerateImageBatch((batchRoot || node).id, retryPromptSource);
+                return;
+            }
             const retryContextPrompt = retryMode === "image" && sourceNode.metadata?.portraitTexture ? buildPortraitTexturePrompt(retryPromptSource, sourceNode.metadata.portraitTexture) : retryPromptSource;
             let rawContext: Awaited<ReturnType<typeof hydrateNodeGenerationContext>> | null;
             try {
@@ -220,6 +230,9 @@ export function useCanvasGenerationRetry({
 
             setRunningNodeId(node.id);
             const controller = startGenerationRequest(node.id, sourceNode.id, node.id);
+            const expectedScope = captureUserScope();
+            const capturedProjectId = projectId;
+            const isCurrent = () => projectIdRef.current === capturedProjectId && !controller.signal.aborted && userScopeMatches(expectedScope);
             let submittedInput: CanvasGenerationFailureInput = { ...context, prompt: mediaPrompt };
             const runAndConsumeRetry = async (input: Parameters<typeof runBackendCanvasGenerationTask>[0]) => {
                 submittedInput = input;
@@ -229,15 +242,16 @@ export function useCanvasGenerationRetry({
                 }
                 const originalError = { code: node.metadata?.generationErrorCode || node.metadata?.taskErrorCode, message: node.metadata?.errorDetails };
                 // Edited input after a non-retryable failure is a new submission, not replay of the old retry operation.
-                const retryContext = node.metadata?.taskId && !shouldBlockAutomaticRetry(originalError, node.metadata?.taskStage)
+                const retryContext = node.metadata?.taskId && !shouldBlockManualRetry(originalError, node.metadata?.taskStage)
                     ? await createGenerationRetryContext(node.metadata.taskId, node.metadata.attemptGroupId)
-                    : { clientOperationId: crypto.randomUUID() };
+                    : { clientOperationId: createClientId() };
                 setNodes((current) => current.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined, generationErrorCode: undefined, resourceReloadAvailable: undefined, failedPromptFingerprint: undefined, failedInputFingerprint: undefined } } : item)));
                 await runCanvasGenerationTaskToConsumer(
-                    { ...input, ...retryContext },
+                    { ...input, ...retryContext, expectedScope },
                     {
                         bindTask: (task) => bindGenerationTask(node.id, task),
                         consumeTask: (task) => applyGenerationTaskResult(node.id, task),
+                        isCurrent,
                     },
                 );
             };
@@ -403,7 +417,7 @@ export function useCanvasGenerationRetry({
                 setRunningNodeId(null);
             }
         },
-        [addedSkills, applyGenerationTaskResult, assets, bindGenerationTask, connectionsRef, domainProjectId, effectiveConfig, finishGenerationRequest, isAiConfigReady, message, nodesRef, projectId, setNodes, setRunningNodeId, startGenerationRequest],
+        [addedSkills, applyGenerationTaskResult, assets, bindGenerationTask, connectionsRef, domainProjectId, effectiveConfig, finishGenerationRequest, isAiConfigReady, message, nodesRef, projectId, regenerateImageBatch, setNodes, setRunningNodeId, startGenerationRequest],
     );
 }
 

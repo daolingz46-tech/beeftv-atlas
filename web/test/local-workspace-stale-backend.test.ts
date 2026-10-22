@@ -90,6 +90,9 @@ export const canvasBackendSubmitPaused = () => false;
 export const pauseCanvasBackendSubmit = () => {};
 export const resumeCanvasBackendSubmit = () => {};
 export const handleRejectedCanvasBackendSave = async () => false;
+export const preserveCanvasConflictDraft = async () => {};
+export const setCanvasBackendSaveProgress = () => {};
+export const clearCanvasBackendSaveProgress = () => {};
 `);
 writeFileSync(assetStubPath, "export const useAssetStore = { getState: () => ({ assets: [] }) };\n");
 writeFileSync(modeStubPath, "export const isLocalWorkspaceMode = () => true;\n");
@@ -119,8 +122,10 @@ writeFileSync(requestPath, `
 export class ApiError extends Error {}
 export let remoteProject: any;
 export let remoteProjects: any[] = [];
-export const setRemoteProject = (next: any) => { remoteProject = next; remoteProjects = next ? [{ id: next.id }] : []; };
-export const http = { get: async (path: string) => path === "/canvas-projects" ? { projects: remoteProjects } : { project: remoteProject } };
+let failurePath = "";
+export const setRequestFailure = (path: string) => { failurePath=path; };
+export const setRemoteProject = (next: any) => { failurePath=""; remoteProject = next; remoteProjects = next ? [{ id: next.id }] : []; };
+export const http = { get: async (path: string) => { if(path===failurePath) throw new Error("read failed"); return path === "/canvas-projects" ? { projects: remoteProjects } : { project: remoteProject }; } };
 `);
 const operationsPath = join(dir, "operations.ts");
 const journalPath = join(dir, "journal.ts");
@@ -168,6 +173,7 @@ export const newCanvasProjectionIdentity = () => "proj-test";
 export const resetCanvasOperationJournalMemory = () => { memory.clear(); };
 `);
 writeFileSync(join(dir, "repository.ts"), repositorySource
+    .replace('"./canvas-hydration-health"', JSON.stringify(new URL("../src/services/canvas-hydration-health.ts", import.meta.url).href))
     .replace('"@/stores/canvas/use-canvas-store"', JSON.stringify(pathToFileURL(storePath).href))
     .replace('"@/stores/canvas/use-canvas-history-store"', JSON.stringify(pathToFileURL(historyPath).href))
     .replace('"@/services/api/request"', JSON.stringify(pathToFileURL(requestPath).href))
@@ -186,6 +192,7 @@ writeFileSync(join(dir, "repository.ts"), repositorySource
 const repository: typeof import("../src/services/local-workspace-repository") = await import(join(dir, "repository.ts"));
 const store = await import(storePath);
 const request = await import(requestPath);
+const journal = await import(journalPath);
 
 const project = (overrides: Partial<Project> = {}): Project => ({
     id: "canvas-a",
@@ -207,10 +214,25 @@ const project = (overrides: Partial<Project> = {}): Project => ({
 beforeEach(() => {
     store.resetProjects([]);
     request.setRemoteProject(undefined);
+    journal.resetCanvasOperationJournalMemory();
 });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("local workspace stale backend protection", () => {
+    it("reports failed list/detail reads and retains cached projects until retry", async () => {
+        const health = await import("../src/services/canvas-hydration-health");
+        const local = project({nodes:[{id:"keep"}]});
+        for (const path of ["/canvas-projects","/canvas-projects/canvas-a"]) {
+            store.resetProjects([local]); request.setRemoteProject(project()); request.setRequestFailure(path);
+            expect(await repository.hydrateLocalCanvasProjectsFromBackend()).toBe(false);
+            expect(store.projects[0]).toEqual(local);
+            expect(health.getCanvasHydrationHealth().error).toContain("现有数据已保留");
+            expect(health.getCanvasHydrationHealth().loading).toBe(false);
+            request.setRequestFailure("");
+            await repository.hydrateLocalCanvasProjectsFromBackend();
+            expect(health.getCanvasHydrationHealth().error).toBe("");
+        }
+    });
     it("keeps dirty local drafts when opening a backend snapshot", async () => {
         const local = project({ updatedAt: "2026-09-22T08:00:00.000Z", nodes: [{ id: "kept-node" }] });
         const remote = project({ updatedAt: "2026-09-22T09:00:00.000Z", revision: 2, nodes: [] });
@@ -218,7 +240,8 @@ describe("local workspace stale backend protection", () => {
         store.recordCanvasDocumentBase(project({ nodes: [] }));
         request.setRemoteProject(remote);
 
-        expect(await repository.openLocalCanvasProjectFromBackend(local.id)).toEqual(local);
+        // The local draft survives and is rebased onto the newer backend revision.
+        expect(await repository.openLocalCanvasProjectFromBackend(local.id)).toMatchObject({ nodes: [{ id: "kept-node" }], revision: 2 });
         expect(store.projects[0].nodes).toEqual([{ id: "kept-node" }]);
     });
 

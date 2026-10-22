@@ -25,6 +25,9 @@ func captureTaskFailureDiagnostics(task *model.Task, err error, source string) {
 	}
 	if source == "local_result" {
 		d.Stage = "本地结果处理"
+		if failure.Category == generation.CategoryLocalDiskFull {
+			d.Stage = "保存生成结果（磁盘空间不足）"
+		}
 	}
 	if len(d.Requests) > 0 && d.Requests[len(d.Requests)-1].Outcome == "response_limit" {
 		last := d.Requests[len(d.Requests)-1]
@@ -33,7 +36,11 @@ func captureTaskFailureDiagnostics(task *model.Task, err error, source string) {
 	var httpErr providerHTTPError
 	var payload providerPayloadError
 	var appErr *kernel.AppError
+	var upload *generation.ReferenceUploadError
 	switch {
+	case errors.As(err, &upload):
+		d.Source, d.Stage, d.Summary = "reference_upload", upload.Meta.Label(), upload.Error()
+		d.HTTPStatus, d.ProviderCode, d.RequestID = upload.HTTPStatus, upload.Code, upload.RequestID
 	case errors.As(err, &httpErr):
 		d.Source, d.HTTPStatus, d.ProviderCode = "upstream_http", httpErr.StatusCode, failure.ProviderCode
 		d.RequestID = firstNonEmpty(failure.RequestID, httpErr.RequestID)

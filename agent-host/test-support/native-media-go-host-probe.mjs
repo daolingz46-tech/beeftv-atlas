@@ -20,14 +20,23 @@ const captured = []; let expected;
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 function nativeParts(request) {
   return request.messages.flatMap(message => Array.isArray(message.content) ? message.content : [])
-    .filter(part => part.type === 'image_url' && part.image_url?.url?.startsWith('data:'))
-    .map(part => { const match = /^data:([^;]+);base64,(.+)$/.exec(part.image_url.url); assert(match); return { mime: match[1], bytes: Buffer.from(match[2], 'base64') }; });
+    .flatMap(part => {
+      if (part.type === 'input_audio') {
+        assert.equal(part.input_audio?.format, 'wav');
+        assert.deepEqual(Object.keys(part.input_audio).sort(), ['data', 'format']);
+        return [{ mime: 'audio/wav', wireType: part.type, bytes: Buffer.from(part.input_audio.data, 'base64') }];
+      }
+      if (part.type !== 'image_url' || !part.image_url?.url?.startsWith('data:')) return [];
+      const match = /^data:([^;]+);base64,(.+)$/.exec(part.image_url.url); assert(match);
+      assert(!match[1].startsWith('audio/'), 'audio must use input_audio, never image_url');
+      return [{ mime: match[1], wireType: part.type, bytes: Buffer.from(match[2], 'base64') }];
+    });
 }
 function assertPart(parts, mime, expectedPart) {
   const part = parts.find(part => part.mime === mime && sha(part.bytes) === expectedPart.sha256);
   assert(part, 'missing or changed actual dispatch '+mime+' expected='+expectedPart.sha256+' actual='+JSON.stringify(parts.map(p=>({mime:p.mime,bytes:p.bytes.length,sha256:sha(p.bytes)}))));
   assert.equal(part.bytes.toString('base64'), expectedPart.data, 'dispatch differs from real Go media bytes');
-  captured.push({ mime, sha256: sha(part.bytes), bytes: part.bytes.length });
+  captured.push({ mime, wireType: part.wireType, sha256: sha(part.bytes), bytes: part.bytes.length });
 }
 const provider = createServer(async (req, res) => {
   try {
@@ -105,7 +114,6 @@ try {
     BEEFTV_AGENT_PORT: String(port), BEEFTV_AGENT_HOST_TOKEN: config.hostToken, BEEFTV_OPS_URL: config.backend,
     BEEFTV_AGENT_API_KEY: 'fixture-only', BEEFTV_AGENT_API: 'openai-completions', BEEFTV_AGENT_MODEL: 'gemini-native-fixture',
     BEEFTV_AGENT_BASE_URL: `http://127.0.0.1:${modelPort}/v1`, BEEFTV_AGENT_TOTAL_REQUEST_BUDGET: '0' };
-  delete env.BEEFTV_AGENT_NEW_SESSION_RUNTIME; // Verify the shipped default, not an opt-in test override.
   delete env.BEEFTV_AGENT_CONTEXT_WINDOW; // Base64 must not force compaction at the shipped 200k limit.
   async function start() {
     child = spawn(process.execPath, [path.join(config.root, 'agent-host/server.mjs')], { cwd: config.root, env, stdio: ['ignore', 'pipe', 'pipe'] });

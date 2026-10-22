@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
+import descriptors from './operation-descriptors.fixture.json';
 import { createTurnBudget } from './request-budget.mjs';
 import { ASSISTANT_CANVAS_NODE_UPDATE_PATCH, createOperationBridge, scopedSchema } from './operation-bridge.mjs';
 import { newTurnAccumulator, resetTurnAccumulator } from './canvas-turn.mjs';
@@ -20,7 +20,7 @@ describe('操作桥', () => {
     const server = createServer(async (req, res) => {
       res.setHeader('content-type', 'application/json');
       if (req.url === '/ops') {
-        res.end(JSON.stringify({ code: 0, data: { ops: [{ id: 'canvas.task.bind', readOnly: false,
+        res.end(JSON.stringify({ code: 0, data: { ops: [{ id: 'canvas.task.bind', assistantModes: ['canvas', 'full-access'], replay: 'safe', readOnly: false,
           params: { type: 'object', properties: { canvasId: { type: 'string' }, taskId: { type: 'string' }, nodeId: { type: 'string' }, outputIndex: { type: 'integer' } } } }] } }));
         return;
       }
@@ -103,7 +103,7 @@ describe('操作桥', () => {
             ops: [{
               id: 'canvas.nodes.create',
               summary: 'Create node',
-              readOnly: false,
+              assistantModes: ['canvas', 'full-access'], replay: 'safe', readOnly: false,
               params: { type: 'object', properties: { canvasId: { type: 'string' }, nodes: { type: 'array' } }, required: ['canvasId', 'nodes'] },
             }],
           },
@@ -119,7 +119,7 @@ describe('操作桥', () => {
         opsUrl: `http://127.0.0.1:${port}`,
         hostToken: 'host-secret',
         desktopToken: '',
-        readOnly: false,
+        assistantModes: ['canvas', 'full-access'], replay: 'safe', readOnly: false,
         turnBudgetContext,
       });
       await bridge.loadDescriptors();
@@ -181,8 +181,8 @@ const NODE_CREATE_PARAMS = {
 
 function nodeUpdateOps() {
   return [
-    { id: 'canvas.node.update', summary: '局部修改一个节点', readOnly: false, params: JSON.parse(JSON.stringify(NODE_UPDATE_PARAMS)) },
-    { id: 'canvas.nodes.create', summary: '批量创建节点', readOnly: false, params: JSON.parse(JSON.stringify(NODE_CREATE_PARAMS)) },
+    { id: 'canvas.node.update', summary: '局部修改一个节点', assistantModes: ['canvas', 'full-access'], replay: 'safe', readOnly: false, params: JSON.parse(JSON.stringify(NODE_UPDATE_PARAMS)) },
+    { id: 'canvas.nodes.create', summary: '批量创建节点', assistantModes: ['canvas', 'full-access'], replay: 'safe', readOnly: false, params: JSON.parse(JSON.stringify(NODE_CREATE_PARAMS)) },
   ];
 }
 
@@ -210,7 +210,7 @@ async function withNodeUpdateBridge(run) {
       opsUrl: `http://127.0.0.1:${port}`,
       hostToken: 'host-secret',
       desktopToken: '',
-      readOnly: false,
+      assistantModes: ['canvas', 'full-access'], replay: 'safe', readOnly: false,
       turnBudgetContext,
     });
     await bridge.loadDescriptors();
@@ -315,14 +315,10 @@ describe('内置助手节点更新投影', () => {
 });
 
 
-test('media discovery descriptions reach actual model-facing bridge tools without changing modes', async () => {
-  // The Go registry test checks these real descriptors. Reuse their source schema
-  // over HTTP here so a fixture cannot silently retain an outdated mode contract.
-  const source = readFileSync(new URL('../backend/internal/operations/media.go', import.meta.url), 'utf8');
-  const params = JSON.parse(source.match(/Params:\s*json.RawMessage\(`([^`]+)`\)/)[1]);
-  const ops = [...source.matchAll(/"(media\.(?:overview|inspect|check))":\s*("[^"\n]+")/g)].map(match => ({
-    id: match[1], summary: JSON.parse(match[2]), readOnly: true, scope: 'canvas', params,
-  }));
+test('media discovery preserves descriptions, required versions and modes in model-facing bridge tools', async () => {
+  // TestHostPolicyContract compares this shared fixture with the Go registry.
+  // Exercise those descriptors over HTTP without parsing Go source syntax.
+  const ops = descriptors.filter(op => ['media.overview', 'media.inspect', 'media.check'].includes(op.id));
   expect(ops).toHaveLength(3);
   const server = createServer((_req, res) => {
     res.setHeader('content-type', 'application/json');
@@ -337,9 +333,12 @@ test('media discovery descriptions reach actual model-facing bridge tools withou
     for (const tool of tools) {
       const original = ops.find(op => op.id === tool.label);
       expect(tool.description).toBe(original.summary);
-      expect(tool.parameters.properties.mode).toEqual(params.properties.mode);
+      expect(tool.parameters.properties.mode).toEqual(original.params.properties.mode);
       expect(tool.parameters.properties.mode.description).toContain('不能判断连续运动或声音');
       expect(tool.parameters.properties.mode.enum).toEqual(['frames', 'video', 'audio']);
+      expect(tool.parameters.properties.expectedVersion).toEqual(original.params.properties.expectedVersion);
+      expect(tool.parameters.properties.expectedVersion.minLength).toBe(1);
+      expect(tool.parameters.required.includes('expectedVersion')).toBe(tool.label !== 'media.overview');
       expect(tool.parameters.properties.canvasId).toBeUndefined();
     }
     expect(tools.find(tool => tool.name === 'media_inspect').description).toContain('15 秒');
@@ -372,10 +371,10 @@ async function withCasBridge(run, { revision = 9 } = {}) {
     const parsed = body ? JSON.parse(body) : {};
     if (req.url === '/ops') {
       res.end(JSON.stringify({ code: 0, data: { ops: [
-        { id: 'canvas.edge.create', summary: '连接两个节点', readOnly: false, params: EDGE_CREATE_PARAMS },
-        { id: 'canvas.node.update', summary: '局部修改一个节点', readOnly: false, params: NODE_UPDATE_PARAMS },
-        { id: 'canvas.nodes.create', summary: '批量创建节点', readOnly: false, params: NODE_CREATE_PARAMS },
-        { id: 'canvas.document.commit', summary: '提交整份画布文档', readOnly: false, params: DOCUMENT_COMMIT_PARAMS },
+        { id: 'canvas.edge.create', summary: '连接两个节点', assistantModes: ['canvas', 'full-access'], replay: 'safe', readOnly: false, params: EDGE_CREATE_PARAMS },
+        { id: 'canvas.node.update', summary: '局部修改一个节点', assistantModes: ['canvas', 'full-access'], replay: 'safe', readOnly: false, params: NODE_UPDATE_PARAMS },
+        { id: 'canvas.nodes.create', summary: '批量创建节点', assistantModes: ['canvas', 'full-access'], replay: 'safe', readOnly: false, params: NODE_CREATE_PARAMS },
+        { id: 'canvas.document.commit', summary: '提交整份画布文档', assistantModes: ['canvas', 'full-access'], replay: 'safe', readOnly: false, params: DOCUMENT_COMMIT_PARAMS },
       ] } }));
       return;
     }

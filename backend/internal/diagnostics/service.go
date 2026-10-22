@@ -1,8 +1,10 @@
 package diagnostics
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"infinite-canvas/backend/internal/environment"
 	"strings"
 	"time"
 
@@ -12,17 +14,23 @@ import (
 )
 
 type Dependencies struct {
-	Store Store
-	Brand Brand
-	Now   func() time.Time
-	NewID func() string
+	DataDir      string
+	UpdateLogDir string
+	Store        Store
+	Brand        Brand
+	Config       ModelConfigProvider
+	Now          func() time.Time
+	NewID        func() string
 }
 
 type Service struct {
-	store Store
-	brand Brand
-	now   func() time.Time
-	newID func() string
+	dataDir      string
+	updateLogDir string
+	store        Store
+	brand        Brand
+	config       ModelConfigProvider
+	now          func() time.Time
+	newID        func() string
 }
 
 func New(deps Dependencies) *Service {
@@ -38,7 +46,11 @@ func New(deps Dependencies) *Service {
 	if brand == nil {
 		brand = staticBrand{name: defaultBrandName, slug: defaultBrandSlug}
 	}
-	return &Service{store: deps.Store, brand: brand, now: now, newID: newID}
+	return &Service{dataDir: deps.DataDir, store: deps.Store, brand: brand, config: deps.Config, now: now, newID: newID, updateLogDir: deps.UpdateLogDir}
+}
+
+func (s *Service) CheckEnvironment(ctx context.Context, repair bool) environment.Report {
+	return environment.Inspect(ctx, s.dataDir, repair)
 }
 
 func (s *Service) Preview(userID string, req ExportRequest) (*Preview, error) {
@@ -46,10 +58,16 @@ func (s *Service) Preview(userID string, req ExportRequest) (*Preview, error) {
 	if err != nil {
 		return nil, err
 	}
+	updateBytes := 0
+	if collection.UpdateLog != nil {
+		updateBytes = len(collection.UpdateLog.Text) + 256
+	}
 	return &Preview{
-		ClientEventLimit: maxClientEvents,
-		TaskCount:        len(collection.Tasks), TaskLogCount: len(collection.TaskLogs), APICallCount: len(collection.APICalls),
-		EstimatedBytes: int64(2048 + len(collection.ClientEvents)*420 + len(collection.Tasks)*620 + len(collection.TaskLogs)*700 + len(collection.APICalls)*520),
+		UpdateLog:          collection.UpdateLog,
+		ClientEventLimit:   maxClientEvents,
+		CanvasBindingCount: len(collection.CanvasBindings),
+		TaskCount:          len(collection.Tasks), TaskLogCount: len(collection.TaskLogs), APICallCount: len(collection.APICalls),
+		EstimatedBytes: int64(2048 + updateBytes + len(collection.CanvasBindings)*600 + len(collection.ClientEvents)*420 + len(collection.Tasks)*620 + len(collection.TaskLogs)*700 + len(collection.APICalls)*520),
 		WillTruncate:   collection.Truncated,
 	}, nil
 }
@@ -66,7 +84,7 @@ func (s *Service) Export(userID string, req ExportRequest) (*Bundle, error) {
 		TimeRange: timeRange{From: collection.Window.From, To: collection.Window.To},
 		TaskID:    collection.TaskID, ProjectID: collection.ProjectID, Description: collection.Description,
 		RedactionVersion: RedactionVersion, Truncated: collection.Truncated,
-		Counts: counts{ClientEvents: len(collection.ClientEvents), Tasks: len(collection.Tasks), TaskLogs: len(collection.TaskLogs), APICalls: len(collection.APICalls)},
+		Counts: counts{CanvasBindings: len(collection.CanvasBindings), ClientEvents: len(collection.ClientEvents), Tasks: len(collection.Tasks), TaskLogs: len(collection.TaskLogs), APICalls: len(collection.APICalls)},
 	}
 	brandName, brandSlug := s.brand.NameAndSlug()
 	if strings.TrimSpace(brandName) == "" {
@@ -133,10 +151,12 @@ func (s *Service) collect(userID string, req ExportRequest) (*collection, error)
 		truncated = true
 	}
 	collected := &collection{
-		Window: window, Description: redactText(req.Description, maxDescription), TaskID: taskID, ProjectID: projectID, Truncated: truncated,
+		Environment: s.CheckEnvironment(context.Background(), false),
+		Window:      window, Description: redactText(req.Description, maxDescription), TaskID: taskID, ProjectID: projectID, Truncated: truncated,
 		Runtime: runtimeRecord{
 			AppVersion: redactText(req.Runtime.AppVersion, 120), BuildCommit: redactText(req.Runtime.BuildCommit, 120),
 			Browser: redactText(req.Runtime.Browser, 240), OS: redactText(req.Runtime.OS, 120), Timezone: redactText(req.Runtime.Timezone, 80),
+			Capabilities: req.Runtime.Capabilities,
 		},
 	}
 	for _, event := range clientEvents {
@@ -145,11 +165,23 @@ func (s *Service) collect(userID string, req ExportRequest) (*collection, error)
 	for _, task := range tasks {
 		collected.Tasks = append(collected.Tasks, sanitizeTask(task))
 	}
+	s.collectCanvasBindings(userID, tasks, collected)
 	for _, taskLog := range taskLogs {
 		collected.TaskLogs = append(collected.TaskLogs, sanitizeTaskLog(taskLog))
 	}
 	for _, apiCall := range apiCalls {
 		collected.APICalls = append(collected.APICalls, sanitizeAPICall(apiCall))
+	}
+	// Best-effort: a missing or unreadable provider snapshot must not fail the
+	// export the user is trying to send.
+	if s.config != nil {
+		if body, readErr := s.config.ReadLocalModelConfig(); readErr == nil {
+			collected.ModelConfig = buildModelConfigSummary(body)
+		}
+	}
+	collected.UpdateLog = collectUpdateLog(s.updateLogDir, window)
+	if collected.UpdateLog != nil && collected.UpdateLog.Truncated {
+		collected.Truncated = true
 	}
 	return collected, nil
 }

@@ -8,12 +8,14 @@ import (
 	"path/filepath"
 	"strings"
 
+	"infinite-canvas/backend/internal/desktopstorage"
 	"infinite-canvas/backend/internal/desktopupdate"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
+	"github.com/wailsapp/wails/v2/pkg/options/windows"
 )
 
 func main() {
@@ -34,6 +36,9 @@ func main() {
 		log.Fatal(err)
 	}
 	app := newDesktopApp(dataDir)
+	if err := configureDesktopTemp(dataDir); err != nil {
+		log.Fatal(err)
+	}
 	startupErrorPath := filepath.Join(dataDir, "startup-error.log")
 	if err := prepareDesktopApp(app); err != nil {
 		_ = os.MkdirAll(dataDir, 0o755)
@@ -42,11 +47,34 @@ func main() {
 	}
 	_ = os.Remove(startupErrorPath)
 
-	err = wails.Run(&options.App{
-		Title:  "BeefTV",
-		Width:  1440,
-		Height: 960,
-		Mac:    &mac.Options{},
+	err = wails.Run(desktopAppOptions(app))
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func desktopAppOptions(app *DesktopApp) *options.App {
+	return &options.App{
+		Title:            "BeefTV",
+		Width:            1440,
+		Height:           960,
+		BackgroundColour: &options.RGBA{R: 13, G: 15, B: 18, A: 255},
+		Mac: &mac.Options{
+			// WKWebView disables element fullscreen by default, including the
+			// video player's fullscreen control.
+			Preferences: &mac.Preferences{FullscreenEnabled: mac.Enabled},
+		},
+		Windows: &windows.Options{
+			Theme: windows.Dark,
+			CustomTheme: &windows.ThemeSettings{
+				DarkModeTitleBar:          windows.RGB(13, 15, 18),
+				DarkModeTitleBarInactive:  windows.RGB(13, 15, 18),
+				DarkModeTitleText:         windows.RGB(244, 244, 245),
+				DarkModeTitleTextInactive: windows.RGB(161, 161, 170),
+				DarkModeBorder:            windows.RGB(39, 39, 42),
+				DarkModeBorderInactive:    windows.RGB(39, 39, 42),
+			},
+		},
 		AssetServer: &assetserver.Options{
 			Assets:  assets,
 			Handler: desktopAssetHandler{app: app},
@@ -54,9 +82,6 @@ func main() {
 		OnStartup:  app.startup,
 		OnShutdown: app.shutdown,
 		Bind:       []interface{}{app},
-	})
-	if err != nil {
-		log.Fatal(err)
 	}
 }
 
@@ -78,9 +103,22 @@ func defaultDataDir() (string, error) {
 	if override := strings.TrimSpace(os.Getenv("CANVAS_DESKTOP_DATA_DIR")); override != "" {
 		return override, nil
 	}
-	root, err := os.UserConfigDir()
+	root, err := desktopstorage.DefaultRoot()
 	if err != nil {
 		return "", fmt.Errorf("定位用户应用数据目录: %w", err)
 	}
-	return filepath.Join(root, "BeefTV"), nil
+	return desktopstorage.Resolve(root)
+}
+
+func configureDesktopTemp(dataDir string) error {
+	path := filepath.Join(dataDir, "cache", "tmp")
+	if err := os.MkdirAll(path, 0700); err != nil {
+		return err
+	}
+	for _, name := range []string{"TMPDIR", "TEMP", "TMP"} {
+		if err := os.Setenv(name, path); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -7,6 +7,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync } from 'n
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { serveEmptySkillContext } from './skill-context-fixture.mjs';
 
 const root = path.resolve(process.argv[2] || '.');
 const destination = process.argv[3];
@@ -14,6 +15,7 @@ const scratch = mkdtempSync(path.join(tmpdir(), 'beeftv media steer '));
 const hostAuth = 'synthetic-host-credential-not-real';
 const model = 'gemini-synthetic-flash';
 const requests = [], seen = [], results = [], httpObservations = [];
+const turnCanvas = new Map();
 let mode = 'steer', count = 0, releaseOld, child, hostLog = '', base;
 const listen = server => new Promise((resolve, reject) => {
   server.once('error', reject); server.listen(0, '127.0.0.1', () => resolve(server.address().port));
@@ -45,8 +47,8 @@ const provider = createServer(async (req, res) => {
 });
 const params = { type: 'object', properties: { nodeId: { type: 'string' }, title: { type: 'string' }, mode: { type: 'string' }, start: { type: 'number' }, end: { type: 'number' } }, required: ['nodeId'] };
 const descriptors = [
-  { id: 'canvas.node.update', readOnly: false, scope: 'canvas', summary: 'Update node', params },
-  ...['media.overview', 'media.inspect'].map(id => ({ id, readOnly: true, scope: 'canvas', summary: id, params })),
+  { id: 'canvas.node.update', assistantModes: ['canvas', 'full-access'], replay: 'safe', readOnly: false, scope: 'canvas', summary: 'Update node', params },
+  ...['media.overview', 'media.inspect'].map(id => ({ id, assistantModes: ['canvas', 'full-access', 'read-only'], replay: 'safe', readOnly: true, scope: 'canvas', summary: id, params })),
 ];
 let jpeg, wav, video;
 function part(bytes, mimeType, type, bad = false) {
@@ -55,13 +57,19 @@ function part(bytes, mimeType, type, bad = false) {
 const ops = createServer(async (req, res) => {
   res.setHeader('content-type', 'application/json');
   if (req.headers['x-beeftv-agent-token'] !== hostAuth) return res.writeHead(403).end('{}');
+  if(serveEmptySkillContext(req,res))return;
   if (req.method === 'GET' && req.url === '/api/ops') return res.end(JSON.stringify({ code: 0, data: { ops: descriptors } }));
+  if (req.url.startsWith('/api/assistant/runtime/turns/')) {
+    const turnId = decodeURIComponent(req.url.split('/')[5] || '');
+    return res.end(JSON.stringify({ code: 0, data: { turnId, canvasId: turnCanvas.get(turnId) || 'canvas', permissionMode: 'canvas', open: true } }));
+  }
   const body = await readJSON(req); seen.push({ path: req.url, body, turn: req.headers['x-beeftv-agent-turn'] });
   const result = req.url.endsWith('media.overview') ? { content: [part(jpeg, 'image/jpeg', 'image', mode === 'bad-hash')] }
     : req.url.endsWith('media.inspect') ? { content: [mode === 'video' ? part(video, 'video/mp4', 'media') : part(wav, 'audio/wav', 'media')] } : { nodeId: 'n1', revision: 2 };
   res.end(JSON.stringify({ code: 0, data: { op: req.url.split('/').at(-1), replayed: false, result } }));
 });
 async function request(route, body) {
+  if (body && body.turnId && body.canvasId) turnCanvas.set(body.turnId, body.canvasId);
   const response = await fetch(base + route, { method: body === undefined ? 'GET' : 'POST',
     headers: { 'content-type': 'application/json', 'X-Beeftv-Agent-Token': hostAuth },
     body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(25000) });
@@ -80,7 +88,9 @@ async function scenario(name, fn) {
   }
   catch (error) { results.push({ name, passed: false, error: error.message }); console.log('FAIL', name, error.message); }
 }
-const nativeURLs = body => (body.messages || []).flatMap(m => Array.isArray(m.content) ? m.content.filter(p => p.type === 'image_url').map(p => p.image_url.url) : []);
+const nativeURLs = body => (body.messages || []).flatMap(m => Array.isArray(m.content) ? m.content.flatMap(p =>
+  p.type === 'image_url' ? [p.image_url.url] :
+  p.type === 'input_audio' ? [`data:audio/${p.input_audio.format};base64,${p.input_audio.data}`] : []) : []);
 try {
   execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=red:s=64x48', '-frames:v', '1', path.join(scratch, 'frame.jpg')]);
   execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=24000:duration=0.25', '-ac', '1', '-c:a', 'pcm_s16le', path.join(scratch, 'clip.wav')]);
@@ -92,9 +102,9 @@ try {
   const reservation = createServer(), hostPort = await listen(reservation); await new Promise(resolve => reservation.close(resolve));
   base = `http://127.0.0.1:${hostPort}`;
   child = spawn(process.execPath, [path.join(root, 'agent-host/server.mjs')], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: {
-    ...process.env, BEEFTV_AGENT_NEW_SESSION_RUNTIME: 'sdk', BEEFTV_AGENT_DATA_DIR: scratch, BEEFTV_AGENT_PORT: String(hostPort), BEEFTV_OPS_URL: `http://127.0.0.1:${opsPort}/api`,
+    ...process.env, BEEFTV_AGENT_DATA_DIR: scratch, BEEFTV_AGENT_PORT: String(hostPort), BEEFTV_OPS_URL: `http://127.0.0.1:${opsPort}/api`,
     BEEFTV_AGENT_HOST_TOKEN: hostAuth, BEEFTV_AGENT_API_KEY: 'synthetic-only', BEEFTV_AGENT_MODEL: model, BEEFTV_AGENT_API: 'openai-completions',
-    BEEFTV_AGENT_BASE_URL: `http://127.0.0.1:${modelPort}/v1`, BEEFTV_AGENT_MAX_REQUESTS_PER_TURN: '12', BEEFTV_AGENT_MAX_TOOL_STEPS_PER_TURN: '12', BEEFTV_AGENT_TURN_TIMEOUT_MS: '20000',
+    BEEFTV_AGENT_BASE_URL: `http://127.0.0.1:${modelPort}/v1`, BEEFTV_AGENT_MAX_REQUESTS_PER_TURN: '12', BEEFTV_AGENT_MAX_TOOL_STEPS_PER_TURN: '12',
   } });
   child.stdout.on('data', data => { hostLog += data; }); child.stderr.on('data', data => { hostLog += data; });
   for (let attempt = 0; attempt < 100; attempt++) { try { if ((await fetch(base + '/health')).ok) break; } catch {} if (child.exitCode !== null) throw Error(hostLog); await delay(100); }
@@ -128,6 +138,10 @@ try {
     const jpegURL = 'data:image/jpeg;base64,' + jpeg.toString('base64'), wavURL = 'data:audio/wav;base64,' + wav.toString('base64');
     assert(nativeURLs(requests[1]).includes(jpegURL), 'real JPEG must enter actual SDK HTTP');
     assert(nativeURLs(requests[2]).includes(wavURL), 'real WAV must enter actual SDK HTTP');
+    assert.deepEqual(requests[2].messages.flatMap(m => Array.isArray(m.content) ? m.content : [])
+      .filter(p => p.type === 'input_audio'), [{ type: 'input_audio', input_audio: { data: wav.toString('base64'), format: 'wav' } }]);
+    assert(!requests[2].messages.some(m => Array.isArray(m.content) &&
+      m.content.some(p => p.type === 'image_url' && p.image_url.url.startsWith('data:audio/'))));
     const messages = requests[2].messages;
     const overviewResult = messages.findIndex(m => m.role === 'tool' && /media_overview/.test(messages.find(a => a.tool_calls?.some(c => c.id === m.tool_call_id))?.tool_calls?.[0]?.function?.name || ''));
     const jpegIndex = messages.findIndex(m => nativeURLs({ messages: [m] }).includes(jpegURL));

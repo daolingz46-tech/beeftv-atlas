@@ -87,13 +87,15 @@ func recordTaskRequestEvidence(req *http.Request, evidence model.TaskRequestEvid
 		evidence.Operation = "submit"
 	}
 	evidence.RequestBytes = req.ContentLength
+	reference, isReference := generation.ReferenceUploadFromContext(req.Context())
+	if isReference {
+		evidence.Operation = "reference_" + reference.Stage
+		evidence.Summary = reference.Label()
+	}
 	responseLimited := evidence.Outcome == "response_limit"
 	evidence.Outcome = "response_received"
 	if err != nil {
 		evidence.Outcome = "transport_error"
-		if !evidence.Dispatched {
-			evidence.Outcome = "not_dispatched"
-		}
 		if evidence.HTTPStatus >= 400 {
 			evidence.Outcome = "http_error"
 		}
@@ -102,6 +104,9 @@ func recordTaskRequestEvidence(req *http.Request, evidence model.TaskRequestEvid
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			evidence.Outcome = "timeout"
+		}
+		if !evidence.Dispatched && !errors.Is(err, context.Canceled) {
+			evidence.Outcome = "not_dispatched"
 		}
 		failure := classifyTaskFailure(err)
 		evidence.Summary = firstNonEmpty(failure.ProviderMessage, err.Error())
@@ -118,6 +123,15 @@ func recordTaskRequestEvidence(req *http.Request, evidence model.TaskRequestEvid
 	}
 	if responseLimited {
 		evidence.Outcome = "response_limit"
+	}
+	if isReference && err != nil {
+		var upload *generation.ReferenceUploadError
+		if errors.As(err, &upload) {
+			evidence.ProviderCode, evidence.RequestID = upload.Code, upload.RequestID
+			evidence.Summary = upload.Error()
+		} else {
+			evidence.Summary = reference.Label() + "：" + generation.DiagnosticSummary(err.Error())
+		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()

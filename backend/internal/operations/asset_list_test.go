@@ -12,6 +12,10 @@ import (
 
 type unusedDomain struct{}
 
+func (unusedDomain) PrepareUserCanvasStoryboard(string, string, string, canvas.StoryboardPreparation, int64) (canvas.UserDataSummary, canvas.StoryboardPreparationResult, error) {
+	panic("unused")
+}
+
 func (unusedDomain) UserConversation(string, string) (taskbinding.ConversationView, error) {
 	panic("unused")
 }
@@ -37,6 +41,15 @@ func (unusedDomain) CreateUserCanvasNodes(string, string, []canvas.NodeDraft, in
 	panic("unused")
 }
 func (unusedDomain) UpdateUserCanvasNodeFields(string, string, string, map[string]any, int64) (canvas.UserDataSummary, error) {
+	panic("unused")
+}
+func (unusedDomain) AppendUserCanvasStoryboardRows(string, string, string, []canvas.StoryboardRowDraft, int64) (canvas.UserDataSummary, []canvas.StoryboardRowIdentity, error) {
+	panic("unused")
+}
+func (unusedDomain) UpdateUserCanvasStoryboardRows(string, string, string, []canvas.StoryboardRowPatch, int64) (canvas.UserDataSummary, canvas.StoryboardRowUpdate, error) {
+	panic("unused")
+}
+func (unusedDomain) RemoveUserCanvasStoryboardRows(string, string, string, []string, int64) (canvas.UserDataSummary, int, error) {
 	panic("unused")
 }
 func (unusedDomain) ConnectUserCanvasNodesAtRevision(string, string, string, string, int64) (canvas.UserDataSummary, error) {

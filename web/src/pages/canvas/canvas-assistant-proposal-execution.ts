@@ -1,4 +1,5 @@
 import type { AssistantGenerationProposal } from "@/services/api/agent-assistant";
+import { ApiError } from "@/services/api/request";
 import type { CanvasNodeData } from "@/types/canvas";
 import type { CanvasNodeGenerationOptions } from "./use-canvas-generation-executor";
 import { buildGenerationConfig } from "@/lib/canvas/canvas-project-generation";
@@ -11,6 +12,8 @@ type ProposalExecution = {
     nodes: CanvasNodeData[];
     claims: Set<string>;
     isHandled: boolean;
+    /** 后端确认这一轮仍有效；返回的文案表示拒绝，不会提交任何生成。 */
+    confirmRunnable?: () => Promise<string | null>;
     prepare: () => Promise<ConfirmedGenerationInputs>;
     generate: (nodeId: string, mode: "image" | "video", prompt: string, options?: CanvasNodeGenerationOptions) => Promise<unknown>;
     markHandled: (proposalId: string) => void;
@@ -37,7 +40,9 @@ export function buildConfirmedGenerationConfig(
     return result;
 }
 
-export async function executeAssistantProposal({ proposal, nodes, claims, isHandled, prepare, generate, markHandled, notify, stillOwns }: ProposalExecution) {
+export async function executeAssistantProposal({ proposal, nodes, claims, isHandled, confirmRunnable, prepare, generate, markHandled, notify, stillOwns }: ProposalExecution) {
+    const kind = proposal.kind;
+    if (kind === "audio") { notify("请将配音加入完整制作方案后确认。"); return; }
     if (isHandled || claims.has(proposal.proposalId)) {
         notify("这项提案已提交或正在提交，请在任务列表查看进度。");
         return;
@@ -57,6 +62,11 @@ export async function executeAssistantProposal({ proposal, nodes, claims, isHand
     let receivedTask = false;
     const started = new Set<string>();
     try {
+        const rejection = confirmRunnable ? await confirmRunnable() : null;
+        if (rejection) {
+            notify(rejection);
+            return;
+        }
         let confirmedInputs: ConfirmedGenerationInputs;
         try {
             confirmedInputs = await prepare();
@@ -65,7 +75,9 @@ export async function executeAssistantProposal({ proposal, nodes, claims, isHand
                 notify(CANVAS_OWNER_CHANGED_PROPOSAL_MESSAGE);
                 return;
             }
-            notify(error instanceof AssistantProposalBlockedError ? ASSISTANT_PROPOSAL_BLOCKED_TEXT[error.reason] : "无法核对提案的最新内容，请检查连接后重试。");
+            notify(error instanceof AssistantProposalBlockedError ? ASSISTANT_PROPOSAL_BLOCKED_TEXT[error.reason]
+                : error instanceof ApiError && error.reason === "continuation_intent_changed" ? "要求已更新，请让助手重新提出生成方案。"
+                : "无法核对提案的最新内容，请检查连接后重试。");
             return;
         }
         if (stillOwns && !stillOwns()) {
@@ -79,7 +91,7 @@ export async function executeAssistantProposal({ proposal, nodes, claims, isHand
         }
         await Promise.allSettled(confirmedTargets.map(async (node) => {
             if (!node) return;
-            await generate(node.id, proposal.kind, node.metadata?.composerContent ?? node.metadata?.prompt ?? "", {
+            await generate(node.id, kind, node.metadata?.composerContent ?? node.metadata?.prompt ?? "", {
                 confirmedModelKey: modelKey,
                 confirmedInputs,
                 clientOperationId: `proposal:${proposal.proposalId}:${node.id}`,

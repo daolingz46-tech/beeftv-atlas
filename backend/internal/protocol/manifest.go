@@ -162,6 +162,12 @@ type metadataAdapter struct {
 }
 
 func (a metadataAdapter) Metadata() Metadata { return a.metadata }
+func (a metadataAdapter) MediaAuth() ManifestAuth {
+	if adapter, ok := a.delegate.(MediaAuthAdapter); ok {
+		return adapter.MediaAuth()
+	}
+	return ManifestAuth{}
+}
 func (a metadataAdapter) AgentAvailable() bool {
 	capability, ok := a.delegate.(AgentCapability)
 	return ok && capability.AgentAvailable()
@@ -356,6 +362,12 @@ func normalizeManifestForProvider(manifest *Manifest, index int) error {
 	manifest.Metadata.Cancel = operationSummaryPtr(provider.Cancel)
 	manifest.Metadata.ContentType = provider.Create.ContentType
 	manifest.Metadata.RequiresPublicMediaURLs = provider.RequiresPublicMediaURLs
+	for kind, transport := range provider.MediaTransport {
+		if (kind != "image" && kind != "video" && kind != "audio") || (transport != "inline" && transport != "url") {
+			return fmt.Errorf("invalid media transport %s: %s", kind, transport)
+		}
+	}
+	manifest.Metadata.MediaTransport = provider.MediaTransport
 	manifest.Metadata.Execution = manifest.Runtime.Backend
 	manifest.Create = provider.Create
 	manifest.Agent = provider.Agent
@@ -413,7 +425,8 @@ func validateManifestOperation(operation ManifestOperation) error {
 
 type manifestAdapter struct{ manifest Manifest }
 
-func (a manifestAdapter) Metadata() Metadata { return a.manifest.Metadata }
+func (a manifestAdapter) Metadata() Metadata      { return a.manifest.Metadata }
+func (a manifestAdapter) MediaAuth() ManifestAuth { return a.manifest.Auth }
 func (a manifestAdapter) AgentAvailable() bool {
 	return a.manifest.Agent != nil && a.manifest.AgentResponse != nil
 }
@@ -716,6 +729,11 @@ func mediaReferencesFromManifestValue(value any, kind string, ephemeral bool) []
 			}
 			result = append(result, reference)
 		case map[string]any:
+			if kind == "video" {
+				if video, ok := typed["video"].(map[string]any); ok {
+					typed = video
+				}
+			}
 			reference := MediaReference{
 				ID: manifestString(typed["id"]), URL: manifestString(typed["url"]), DataURL: manifestString(typed["dataUrl"]),
 				Kind: defaultValue(manifestString(typed["kind"]), kind), Role: manifestString(typed["role"]), MIMEType: manifestString(typed["mimeType"]),
@@ -726,6 +744,9 @@ func mediaReferencesFromManifestValue(value any, kind string, ephemeral bool) []
 			}
 			if reference.DataURL == "" {
 				reference.DataURL = firstString(typed, "data_url", "b64_json")
+				if kind == "video" && reference.DataURL == "" {
+					reference.DataURL = firstString(typed, "bytesBase64Encoded")
+				}
 			}
 			// OpenAI / Ark 等渠道常直接返回裸 b64_json；声明式结果下载要求 data URL。
 			reference.DataURL = normalizeManifestInlineDataURL(reference.DataURL, reference.Kind, firstString(typed, "output_format", "mime_type", "mimeType"))
@@ -1331,12 +1352,37 @@ func arrayValue(value any) []any {
 
 func firstPathValue(payload map[string]any, paths ...string) string {
 	for _, path := range paths {
+		if strings.Contains(path, "*") {
+			if text := strings.Join(manifestTextPathValues(payload, strings.Split(path, ".")), ""); strings.TrimSpace(text) != "" {
+				return strings.TrimSpace(text)
+			}
+			continue
+		}
 		value := pathValue(payload, path)
 		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
 			return strings.TrimSpace(text)
 		}
 	}
 	return ""
+}
+
+// Responses text may follow reasoning/tool items and span multiple content
+// blocks. Wildcards collect text in wire order without guessing array indexes.
+func manifestTextPathValues(value any, parts []string) []string {
+	if len(parts) == 0 {
+		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+			return []string{text}
+		}
+		return nil
+	}
+	if parts[0] == "*" {
+		var values []string
+		for _, item := range arrayValue(value) {
+			values = append(values, manifestTextPathValues(item, parts[1:])...)
+		}
+		return values
+	}
+	return manifestTextPathValues(manifestPathValue(value, parts[0]), parts[1:])
 }
 
 func manifestError(payload map[string]any, paths ...string) bool {

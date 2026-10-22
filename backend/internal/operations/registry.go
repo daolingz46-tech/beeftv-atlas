@@ -19,10 +19,11 @@ const (
 // Context 是一次操作执行时可用的上下文。Domain 已经绑在当前事务上。
 type Context struct {
 	OperationID string
-	Context context.Context
-	UserID  string
-	Caller  Caller
-	Domain  Domain
+	TurnID      string
+	Context     context.Context
+	UserID      string
+	Caller      Caller
+	Domain      Domain
 }
 
 // Handler 实现一个操作；返回值必须是可 JSON 序列化的业务结果。
@@ -33,22 +34,28 @@ type ReplayProjection func(ctx *Context, params json.RawMessage, stored any) (an
 
 // Op 是操作的唯一定义，手工 UI、CLI、MCP 与内置助手都由它派生。
 type Op struct {
-	ID            string
-	Summary       string
-	ReadOnly      bool
-	Scope         Scope
-	Params        json.RawMessage
-	Handler       Handler
-	ProjectReplay ReplayProjection
+	ID                string
+	Summary           string
+	ReadOnly          bool
+	Scope             Scope
+	Params            json.RawMessage
+	Handler           Handler
+	ProjectReplay     ReplayProjection
+	AssistantCanvas   bool
+	AssistantProposal bool
+	ReplaySafe        bool
+	ReplayUnsafe      bool // A read can still incur an external model charge.
 }
 
 // Descriptor 是给客户端做能力发现用的稳定描述。
 type Descriptor struct {
-	ID       string          `json:"id"`
-	Summary  string          `json:"summary"`
-	ReadOnly bool            `json:"readOnly"`
-	Scope    Scope           `json:"scope"`
-	Params   json.RawMessage `json:"params"`
+	ID             string          `json:"id"`
+	Summary        string          `json:"summary"`
+	ReadOnly       bool            `json:"readOnly"`
+	Scope          Scope           `json:"scope"`
+	Params         json.RawMessage `json:"params"`
+	AssistantModes []string        `json:"assistantModes"`
+	Replay         string          `json:"replay"`
 }
 
 // Registry 持有全部操作定义；写操作必须在事务里执行，保证与操作记录同提交。
@@ -106,7 +113,35 @@ func (r *Registry) Descriptor(id string) (Descriptor, bool) {
 }
 
 func (op *Op) Descriptor() Descriptor {
-	return Descriptor{ID: op.ID, Summary: op.Summary, ReadOnly: op.ReadOnly, Scope: op.Scope, Params: op.writeAwareParams()}
+	replay := "unsafe"
+	if (op.ReadOnly || op.ReplaySafe) && !op.ReplayUnsafe {
+		replay = "safe"
+	}
+	return Descriptor{ID: op.ID, Summary: op.Summary, ReadOnly: op.ReadOnly, Scope: op.Scope, Params: op.writeAwareParams(), AssistantModes: op.assistantModes(), Replay: replay}
+}
+
+func (op *Op) assistantModes() []string {
+	modes := []string{}
+	if op.Scope != ScopeConversation {
+		modes = append(modes, "full-access")
+	}
+	if op.ReadOnly && !op.AssistantProposal {
+		modes = append(modes, "read-only")
+	}
+	if op.AssistantCanvas {
+		modes = append(modes, "canvas")
+	}
+	return modes
+}
+
+// AssistantVisible is shared by backend authorization and host capability discovery.
+func (op *Op) AssistantVisible(mode string) bool {
+	for _, allowed := range op.assistantModes() {
+		if allowed == mode {
+			return true
+		}
+	}
+	return false
 }
 
 func (op *Op) writeAwareParams() json.RawMessage {
@@ -207,6 +242,21 @@ func (r *Registry) Execute(req Request) (Result, error) {
 		if err := caller.Scope.Allows(op, params); err != nil {
 			return Result{}, err
 		}
+		if op.ID == "canvas.node.bind_asset" {
+			// Binding also reads an asset. Authorize before opening the write
+			// transaction: project membership uses the shared SQLite connection.
+			var asset struct {
+				AssetID string `json:"assetId"`
+			}
+			if err := json.Unmarshal(params, &asset); err != nil {
+				return Result{}, InvalidArg("invalid_params", "参数必须是 JSON 对象")
+			}
+			readParams, _ := json.Marshal(map[string]string{"assetId": asset.AssetID})
+			read := assetGetOperation()
+			if err := caller.Scope.Allows(&read, readParams); err != nil {
+				return Result{}, err
+			}
+		}
 	}
 	if op.ReadOnly {
 		opID = ""
@@ -231,7 +281,7 @@ func (r *Registry) Execute(req Request) (Result, error) {
 	}
 	outcome, err := r.store.RunDomain(runCtx, RunRequest{UserID: req.UserID, OpID: opID, Op: op.ID,
 		PayloadHash: canonicalHash, AlternatePayloadHash: alternateHash, TurnID: req.TurnID, CanvasID: target.CanvasID}, r.binder, func(domain Domain) ([]byte, error) {
-		execCtx := &Context{Context: runCtx, UserID: req.UserID, Caller: caller, Domain: domain, OperationID: opID}
+		execCtx := &Context{Context: runCtx, UserID: req.UserID, Caller: caller, Domain: domain, OperationID: opID, TurnID: req.TurnID}
 		value, runErr := op.Handler(execCtx, params)
 		if runErr != nil {
 			return nil, AsError(runErr)

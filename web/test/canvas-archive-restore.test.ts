@@ -4,6 +4,7 @@ import { zipSync } from "fflate";
 import { archiveMediaIdempotencyKey, assertRestoredCanvasMatches, restoreCanvasArchive, type CanvasArchiveRestoreHost } from "@/lib/canvas/canvas-archive-restore";
 import { openCanvasArchive } from "@/lib/canvas/canvas-export";
 import { setActiveUserScope } from "@/lib/user-scope";
+import { useOperationProgress } from "@/stores/use-operation-progress";
 import { ARCHIVE_MAX_ENTRY_BYTES, ARCHIVE_MAX_FILES, ARCHIVE_MAX_TOTAL_BYTES, createZip } from "@/lib/zip";
 import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
 import type { CanvasNodeData } from "@/types/canvas";
@@ -12,6 +13,7 @@ import type { TimelineProject } from "@/types/timeline";
 const encoder = new TextEncoder();
 
 afterEach(() => {
+    useOperationProgress.setState({ entries: {} });
     globalThis.window = undefined as unknown as Window & typeof globalThis;
 });
 
@@ -342,6 +344,8 @@ test("production restore remaps media and timeline, preserves drawings, and igno
 test("persist failure does not report saved and rolls back this attempt", async () => {
     const { host, folders, projects, deleted } = memoryHost({
         persistProject: async () => {
+            const operation = Object.values(useOperationProgress.getState().entries).find(item => item.title === "导入画布备份");
+            expect(operation?.phase).toBe("processing");
             throw new Error("画布未保存到工作区");
         },
     });
@@ -349,6 +353,7 @@ test("persist failure does not report saved and rolls back this attempt", async 
     expect(projects).toEqual([]);
     expect(folders).toEqual([]);
     expect(deleted).toEqual(["imported-1"]);
+    expect(Object.values(useOperationProgress.getState().entries).find(item => item.title === "导入画布备份")?.phase).toBe("error");
 });
 
 test("retrying a valid archive creates new IDs and never reuses archive workspace IDs", async () => {
@@ -430,7 +435,9 @@ test("restore remaps director panorama, object, and screenshot media into the de
 test("one immediate upload rejection waits for delayed success then cleans that artifact", async () => {
     let closed = false;
     let delayedDone = false;
+    const activeProgress = new Set<string>();
     const { host, deleted, deletedResources, projects, folders } = memoryHost({
+        onProjectProgress: (id, value) => { if (value) activeProgress.add(id); else activeProgress.delete(id); },
         uploadMedia: async (_blob, _kind, meta) => {
             if (closed) throw new Error("post-cleanup write");
             if (meta.storageKey === "video:clip") throw new Error("upload-fail");
@@ -446,8 +453,20 @@ test("one immediate upload rejection waits for delayed success then cleans that 
     expect(projects).toEqual([]);
     expect(folders).toEqual([]);
     expect(deleted).toEqual([]);
+    expect(activeProgress.size).toBe(0);
     closed = true;
     await new Promise((resolve) => setTimeout(resolve, 50));
+});
+
+test("asset binding failure removes import save progress before returning", async () => {
+    const activeProgress = new Set<string>();
+    const state = memoryHost({
+        onProjectProgress: (id, value) => { if (value) activeProgress.add(id); else activeProgress.delete(id); },
+        bindMediaAsset: async () => { throw new Error("binding-fail"); },
+    });
+    await expect(restoreCanvasArchive(await validZip(), state.host)).rejects.toThrow("binding-fail");
+    expect(activeProgress.size).toBe(0);
+    expect(state.projects).toEqual([]);
 });
 
 test("failed durable cleanup preserves the visible imported project and reports both failures", async () => {

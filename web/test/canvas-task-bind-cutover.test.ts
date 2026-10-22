@@ -1,10 +1,11 @@
+import { getActiveUserScope, setActiveUserScope } from "@/lib/user-scope";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import { bindBackendCanvasGenerationResult, CanvasBindFlushError, CanvasBindProjectionAdoptionError } from "@/services/canvas-generation-consumer";
-import { UserScopeAbandonedError, type CapturedUserScope } from "@/lib/user-scope-guard";
+import { captureUserScope, UserScopeAbandonedError, type CapturedUserScope } from "@/lib/user-scope-guard";
 import { ApiError } from "@/services/api/request";
 import { CanvasBackendSubmitPausedError } from "@/services/canvas-revision-conflict";
 import type { CanvasTaskBindReceipt } from "@/services/api/operations";
@@ -12,7 +13,8 @@ import { hydrateBackendGeneratedAsset, hydrateBackendGeneratedOutputs } from "@/
 import { useCanvasStore, type CanvasProject } from "@/stores/canvas/use-canvas-store";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 import type { GenerationTask } from "@/services/api/task-center";
-import type { Asset } from "@/stores/use-asset-store";
+import { useAssetStore, type Asset } from "@/stores/use-asset-store";
+import { getClientDiagnosticEvents, recordDiagnosticEvent, setDiagnosticUserScope } from "@/services/diagnostics/client-diagnostics";
 
 const generationSource = readFileSync(resolve(import.meta.dir, "../src/pages/canvas/use-canvas-generation.ts"), "utf8");
 const consumerSource = readFileSync(resolve(import.meta.dir, "../src/services/canvas-generation-consumer.ts"), "utf8");
@@ -71,6 +73,33 @@ function succeededTask(): GenerationTask {
         outputs: [{ outputIndex: 0, mediaType: "image", materializedAssetId: "generation_abc" }],
     };
 }
+
+test("normal output readiness retries emit one request and retain the earlier real failure", async () => {
+    setDiagnosticUserScope("bind-readiness-retention");
+    recordDiagnosticEvent({ category: "task", level: "error", code: "retained-conflict", message: "绑定冲突" });
+    const node = canvasNode("node-1", "目标", { taskId: "task-1" });
+    const project = canvasProject("canvas-1", [node], 4);
+    useCanvasStore.setState({ projects: [project] });
+    const identity = captured("user-a", 1);
+    let attempts = 0;
+    await bindBackendCanvasGenerationResult({
+        canvasId: project.id, nodeId: node.id, task: succeededTask(), nodesRef: { current: [node] }, setNodes: () => {}, isCurrent: () => true,
+        runtime: {
+            hydrateOutputs: async () => undefined, persistDocument: async () => undefined,
+            captureScope: () => identity, liveScope: () => identity, now: () => 0, sleep: async () => undefined,
+            refreshTask: async () => succeededTask(), adoptConfirmedProjection: async () => project,
+            bindOutput: async (input) => {
+                if (++attempts <= 600) throw new ApiError("仍在保存", { status: 409, reason: "output_not_ready" });
+                return { op: "canvas.task.bind", opId: input.operationId, replayed: false, result: { bindingStatus: "bound", canvas: project, revision: 4 } };
+            },
+        },
+    });
+    const events = getClientDiagnosticEvents();
+    expect(attempts).toBe(601);
+    expect(events.filter(event => event.code === "generation_bind_requested")).toHaveLength(1);
+    expect(events.filter(event => event.code === "generation_bind_refused")).toHaveLength(0);
+    expect(events.some(event => event.code === "retained-conflict")).toBe(true);
+});
 
 describe("backend canvas bind cutover", () => {
     test("use-canvas-generation binds succeeded backend tasks without snapshot doublewrite", () => {
@@ -966,4 +995,335 @@ describe("bindBackendCanvasGenerationResult", () => {
         expect(nodesRef.current.find((item) => item.id === "node-remote")?.title).toBe("别人刚加的镜头");
         expect(useCanvasStore.getState().projects[0]?.nodes.find((item) => item.id === "node-remote")?.metadata?.prompt).toBe("远程编辑");
     });
+
+    test("self-heals unbound reference media and batch roots when flush hits canvas media asset guard error", async () => {
+        const target = canvasNode("node-target", "生成目标", { taskId: "task-1", status: "loading", prompt: "猫" });
+        const unboundRef = canvasNode("node-ref", "参考图", {
+            status: "success",
+            content: "/api/resources/res-ref/file",
+            storageKey: "resource:res-ref",
+        });
+        const batchPrimary = canvasNode("node-batch-child", "子图", {
+            status: "success",
+            content: "/api/resources/res-batch/file",
+            storageKey: "resource:res-batch",
+            assetId: "asset-batch",
+            batchRootId: "node-batch-root",
+        });
+        const batchRoot = canvasNode("node-batch-root", "组图根", {
+            status: "success",
+            content: "/api/resources/res-batch/file",
+            storageKey: "resource:res-batch",
+            isBatchRoot: true,
+            primaryImageId: "node-batch-child",
+        });
+        const live = canvasProject("canvas-1", [target, unboundRef, batchPrimary, batchRoot], 3);
+        const server = canvasProject("canvas-1", [
+            { ...target, metadata: { ...target.metadata, status: "success", content: "/api/resources/res-1/file", storageKey: "resource:res-1", assetId: "generation_abc" } },
+            { ...unboundRef, metadata: { ...unboundRef.metadata, assetId: "asset-ref-healed" } },
+            batchPrimary,
+            { ...batchRoot, metadata: { ...batchRoot.metadata, assetId: "asset-batch" } },
+        ], 4);
+        useCanvasStore.setState({ projects: [live] });
+        const nodesRef = { current: [target, unboundRef, batchPrimary, batchRoot] };
+        const identity = captured("user-a", 1);
+        const ensuredNodeIds: string[] = [];
+        let persistAttempts = 0;
+
+        await bindBackendCanvasGenerationResult({
+            canvasId: "canvas-1",
+            nodeId: "node-target",
+            task: succeededTask(),
+            isCurrent: () => true,
+            nodesRef,
+            setNodes: (value) => {
+                nodesRef.current = typeof value === "function" ? value(nodesRef.current) : value;
+            },
+            runtime: {
+                hydrateOutputs: async () => undefined,
+                ensureNodeAsset: async ({ node }) => {
+                    ensuredNodeIds.push(node.id);
+                    return {
+                        assetId: node.id === "node-ref" ? "asset-ref-healed" : "asset-batch",
+                        created: true,
+                        linkedToProject: false,
+                        confirmed: true,
+                    };
+                },
+                persistDocument: async (_id, patch) => {
+                    persistAttempts += 1;
+                    const batchRootNode = patch.nodes?.find((item) => item.id === "node-batch-root");
+                    expect(batchRootNode?.metadata?.assetId).toBe("asset-batch");
+                    const refNode = patch.nodes?.find((item) => item.id === "node-ref");
+                    if (persistAttempts === 1) {
+                        expect(refNode?.metadata?.assetId).toBeUndefined();
+                        throw new ApiError("画布媒体尚未进入素材库，请等待同步完成后重试", { status: 400 });
+                    }
+                    expect(refNode?.metadata?.assetId).toBe("asset-ref-healed");
+                },
+                bindOutput: async (input) => ({
+                    op: "canvas.task.bind",
+                    opId: input.operationId,
+                    replayed: false,
+                    revision: 4,
+                    result: bindReceipt(server, "node-target", { effectKey: input.operationId }),
+                }),
+                adoptConfirmedProjection: async (project) => {
+                    useCanvasStore.setState({ projects: [project] });
+                    return project;
+                },
+                captureScope: () => identity,
+                liveScope: () => identity,
+            },
+        });
+
+        expect(persistAttempts).toBe(2);
+        expect(ensuredNodeIds).toContain("node-ref");
+        expect(nodesRef.current.find((item) => item.id === "node-target")?.metadata?.status).toBe("success");
+        expect(nodesRef.current.find((item) => item.id === "node-ref")?.metadata?.assetId).toBe("asset-ref-healed");
+        expect(nodesRef.current.find((item) => item.id === "node-batch-root")?.metadata?.assetId).toBe("asset-batch");
+    });
+
+    test("preserves distinct assetIds on nodes sharing a resource and clears mismatched assetId on open canvas when ensure returns empty", async () => {
+        useAssetStore.setState({
+            assets: [
+                {
+                    id: "asset-wrong",
+                    kind: "image",
+                    title: "错误关联素材",
+                    coverUrl: "/api/resources/res-other/file",
+                    tags: [],
+                    createdAt: "2026-09-24T00:00:00.000Z",
+                    updatedAt: "2026-09-24T00:00:00.000Z",
+                    data: {
+                        dataUrl: "/api/resources/res-other/file",
+                        storageKey: "resource:res-other",
+                        width: 100,
+                        height: 100,
+                        bytes: 10,
+                        mimeType: "image/png",
+                    },
+                },
+            ],
+        });
+        const target = canvasNode("node-target", "目标节点", { taskId: "task-1", status: "loading" });
+        const copyA = canvasNode("node-copy-a", "副本A", {
+            status: "success",
+            content: "/api/resources/res-shared/file",
+            storageKey: "resource:res-shared",
+            assetId: "asset-copy-a",
+        });
+        const copyB = canvasNode("node-copy-b", "副本B", {
+            status: "success",
+            content: "/api/resources/res-shared/file",
+            storageKey: "resource:res-shared",
+            assetId: "asset-copy-b",
+        });
+        const mismatched = canvasNode("node-mismatched", "错配节点", {
+            status: "success",
+            content: "/api/resources/res-unensured/file",
+            storageKey: "resource:res-unensured",
+            assetId: "asset-wrong",
+        });
+        const live = canvasProject("canvas-1", [target, copyA, copyB, mismatched], 3);
+        const server = canvasProject("canvas-1", [
+            { ...target, metadata: { ...target.metadata, status: "success", content: "/api/resources/res-1/file", storageKey: "resource:res-1", assetId: "generation_abc" } },
+            copyA,
+            copyB,
+            { ...mismatched, metadata: { ...mismatched.metadata, assetId: undefined } },
+        ], 4);
+        useCanvasStore.setState({ projects: [live] });
+        const nodesRef = { current: [target, copyA, copyB, mismatched] };
+        const identity = captured("user-a", 1);
+        let persistAttempts = 0;
+
+        await bindBackendCanvasGenerationResult({
+            canvasId: "canvas-1",
+            nodeId: "node-target",
+            task: succeededTask(),
+            isCurrent: () => true,
+            nodesRef,
+            setNodes: (value) => {
+                nodesRef.current = typeof value === "function" ? value(nodesRef.current) : value;
+            },
+            runtime: {
+                hydrateOutputs: async () => undefined,
+                ensureNodeAsset: async ({ node }) => ({
+                    assetId: node.id === "node-mismatched" ? "" : (node.metadata?.assetId || ""),
+                    created: false,
+                    linkedToProject: false,
+                    confirmed: node.id !== "node-mismatched",
+                }),
+                persistDocument: async (_id, patch) => {
+                    persistAttempts += 1;
+                    if (persistAttempts === 1) {
+                        throw new ApiError("画布媒体与素材库记录不一致，请重新同步", { status: 400 });
+                    }
+                    expect(patch.nodes?.find((item) => item.id === "node-copy-a")?.metadata?.assetId).toBe("asset-copy-a");
+                    expect(patch.nodes?.find((item) => item.id === "node-copy-b")?.metadata?.assetId).toBe("asset-copy-b");
+                    expect(patch.nodes?.find((item) => item.id === "node-mismatched")?.metadata?.assetId).toBeUndefined();
+                },
+                bindOutput: async (input) => ({
+                    op: "canvas.task.bind",
+                    opId: input.operationId,
+                    replayed: false,
+                    revision: 4,
+                    result: bindReceipt(server, "node-target", { effectKey: input.operationId }),
+                }),
+                adoptConfirmedProjection: async (project) => {
+                    useCanvasStore.setState({ projects: [project] });
+                    return project;
+                },
+                captureScope: () => identity,
+                liveScope: () => identity,
+            },
+        });
+
+        expect(persistAttempts).toBe(2);
+        expect(nodesRef.current.find((item) => item.id === "node-copy-a")?.metadata?.assetId).toBe("asset-copy-a");
+        expect(nodesRef.current.find((item) => item.id === "node-copy-b")?.metadata?.assetId).toBe("asset-copy-b");
+        expect(nodesRef.current.find((item) => item.id === "node-mismatched")?.metadata?.assetId).toBeUndefined();
+    });
+
+    test("keeps declared assetId when local asset row is missing or has no readable resourceId yet, and aborts heal cleanly if canvas unmounts mid-heal", async () => {
+        useAssetStore.setState({
+            assets: [
+                {
+                    id: "asset-no-res-id",
+                    kind: "image",
+                    title: "尚未解析资源ID的素材",
+                    coverUrl: "blob:http://localhost/local-preview",
+                    tags: [],
+                    createdAt: "2026-09-24T00:00:00.000Z",
+                    updatedAt: "2026-09-24T00:00:00.000Z",
+                    data: {
+                        dataUrl: "blob:http://localhost/local-preview",
+                        width: 100,
+                        height: 100,
+                        bytes: 10,
+                        mimeType: "image/png",
+                    },
+                },
+            ],
+        });
+        const target = canvasNode("node-target", "目标节点", { taskId: "task-1", status: "loading" });
+        const missingRowNode = canvasNode("node-missing-row", "远端已确认但本地未水合", {
+            status: "success",
+            content: "/api/resources/res-missing-row/file",
+            storageKey: "resource:res-missing-row",
+            assetId: "asset-server-only",
+        });
+        const noResIdNode = canvasNode("node-no-res-id", "本地无资源ID素材", {
+            status: "success",
+            content: "/api/resources/res-no-res-id/file",
+            storageKey: "resource:res-no-res-id",
+            assetId: "asset-no-res-id",
+        });
+        const live = canvasProject("canvas-1", [target, missingRowNode, noResIdNode], 3);
+        const server = canvasProject("canvas-1", [
+            { ...target, metadata: { ...target.metadata, status: "success", content: "/api/resources/res-1/file", storageKey: "resource:res-1", assetId: "generation_abc" } },
+            missingRowNode,
+            noResIdNode,
+        ], 4);
+        useCanvasStore.setState({ projects: [live] });
+        const nodesRef = { current: [target, missingRowNode, noResIdNode] };
+        const identity = captured("user-a", 1);
+        let persistAttempts = 0;
+        let currentMounted = true;
+        const observedExplicitIds: Array<string | undefined> = [];
+
+        let bindAttempts = 0;
+
+        await expect(
+            bindBackendCanvasGenerationResult({
+                canvasId: "canvas-1",
+                nodeId: "node-target",
+                task: succeededTask(),
+                isCurrent: () => currentMounted,
+                nodesRef,
+                setNodes: (value) => {
+                    nodesRef.current = typeof value === "function" ? value(nodesRef.current) : value;
+                },
+                runtime: {
+                    hydrateOutputs: async () => undefined,
+                    ensureNodeAsset: async ({ node }) => {
+                        observedExplicitIds.push(node.metadata?.assetId);
+                        if (node.id === "node-missing-row") {
+                            currentMounted = false;
+                            return {
+                                assetId: "asset-server-only-updated",
+                                created: false,
+                                linkedToProject: false,
+                                confirmed: true,
+                            };
+                        }
+                        return {
+                            assetId: node.metadata?.assetId || "fallback-id",
+                            created: false,
+                            linkedToProject: false,
+                            confirmed: true,
+                        };
+                    },
+                    persistDocument: async () => {
+                        persistAttempts += 1;
+                        if (persistAttempts === 1) {
+                            throw new ApiError("画布媒体尚未进入素材库，请等待同步完成后重试", { status: 400 });
+                        }
+                    },
+                    bindOutput: async (input) => {
+                        bindAttempts += 1;
+                        return {
+                            op: "canvas.task.bind",
+                            opId: input.operationId,
+                            replayed: false,
+                            revision: 4,
+                            result: bindReceipt(server, "node-target", { effectKey: input.operationId }),
+                        };
+                    },
+                    adoptConfirmedProjection: async (project) => {
+                        useCanvasStore.setState({ projects: [project] });
+                        return project;
+                    },
+                    captureScope: () => identity,
+                    liveScope: () => identity,
+                },
+            }),
+        ).rejects.toMatchObject({ name: "AbortError" });
+
+        expect(persistAttempts).toBe(1);
+        expect(bindAttempts).toBe(0);
+        expect(observedExplicitIds).toEqual(["asset-server-only"]);
+        expect(nodesRef.current.find((item) => item.id === "node-missing-row")?.metadata?.assetId).toBe("asset-server-only");
+        expect(nodesRef.current.find((item) => item.id === "node-no-res-id")?.metadata?.assetId).toBe("asset-no-res-id");
+        expect(useCanvasStore.getState().projects[0]?.nodes.find((item) => item.id === "node-missing-row")?.metadata?.assetId).toBe("asset-server-only");
+        expect(useCanvasStore.getState().projects[0]?.nodes.find((item) => item.id === "node-no-res-id")?.metadata?.assetId).toBe("asset-no-res-id");
+    });
+});
+
+
+test("history asset hydration rejects account switches and A-to-B-to-A before writing any asset", async () => {
+    const previous = getActiveUserScope();
+    try {
+        for (const returnToA of [false, true]) {
+            setActiveUserScope("history-owner-a");
+            const expectedScope = captureUserScope();
+            let writes = 0;
+            let gets = 0;
+            const pending = hydrateBackendGeneratedOutputs({ outputs: [0, 1, 2, 3].map((outputIndex) => ({ outputIndex, mediaType: "image" as const, materializedAssetId: `history-${outputIndex}` })) }, undefined, {
+                expectedScope,
+                readAssets: () => [],
+                getAsset: async (id) => {
+                    gets++;
+                    await Promise.resolve();
+                    setActiveUserScope("history-owner-b");
+                    if (returnToA) setActiveUserScope("history-owner-a");
+                    return { asset: { ...completeImageAsset, id } };
+                },
+                writeAsset: () => { writes++; },
+            });
+            await expect(pending).rejects.toBeInstanceOf(UserScopeAbandonedError);
+            expect(gets).toBe(1);
+            expect(writes).toBe(0);
+        }
+    } finally { setActiveUserScope(previous); }
 });

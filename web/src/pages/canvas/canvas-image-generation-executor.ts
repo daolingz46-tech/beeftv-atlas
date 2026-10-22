@@ -1,22 +1,25 @@
 import { nanoid } from "nanoid";
+import { projectCanvasGenerationSubmission, rebaseCanvasGenerationTarget } from "@/lib/canvas/canvas-generation-live-target";
 
 import { NODE_DEFAULT_SIZE } from "@/constant/canvas";
 import { canGenerateImageInPlace, findAvailableGenerationGroupPosition, imageGenerationChildPosition, generationFailureNodeStatus, imageGenerationGroupSize } from "@/lib/canvas/canvas-generation-layout";
 import { cancelIncompleteImageBatch, retireImageBatchChildren } from "@/lib/canvas/canvas-image-batch-retry";
 import { buildImageGenerationNodeTitle } from "@/lib/canvas/canvas-generation-title";
 import { nodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
-import { canvasImageReferenceLimitError, buildImageGenerationMetadata, getGenerationCount, isGenerationCanceled, runCanvasGenerationTaskToConsumer } from "@/lib/canvas/canvas-project-generation";
+import { canvasImageReferenceLimitError, buildImageGenerationMetadata, clearInPlaceMediaOutputMetadata, getGenerationCount, isGenerationCanceled, resetGenerationTaskMetadata, runCanvasGenerationTaskToConsumer } from "@/lib/canvas/canvas-project-generation";
 import { imageGenerationReferenceConnections } from "@/lib/canvas/canvas-resource-references";
 import { canvasGenerationPromptMetadata } from "@/lib/canvas/canvas-generation-submission";
 import { mediaResultMetadata } from "@/lib/canvas/canvas-node-semantics";
 import { CONTENT_MODERATION_ERROR_CODE, type GenerationFailureMetadata } from "@/lib/generation-error";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
-import { captureUserScope, isUserScopeAbandonedError, userScopeMatches } from "@/lib/user-scope-guard";
+import { assertUserScope, captureUserScope, isUserScopeAbandonedError, userScopeMatches } from "@/lib/user-scope-guard";
 import { CanvasGenerationTargetSaveError } from "@/services/canvas-generation-errors";
+import { mergedImageCapabilityConfig } from "@/lib/model-selection";
+import type { GenerationTask } from "@/services/api/task-center";
 
 import type { CanvasGenerationExecution } from "./canvas-generation-executor-types";
-import { canvasGenerationFailureMetadata, canvasImageGenerationHasPendingResult } from "./canvas-generation-failure";
+import { canvasGenerationFailureMetadata, canvasImageGenerationHasPendingResult, canvasImagePendingResultMessage, isKeptGenerationResultCode } from "./canvas-generation-failure";
 
 const NODE_STATUS_LOADING = "loading" as const;
 const NODE_STATUS_SUCCESS = "success" as const;
@@ -50,11 +53,12 @@ export async function executeImageGeneration({
     taskContext,
     retryContext,
     clientOperationId,
+    onSubmissionPlan,
     showError,
     registerPendingNodeIds,
 }: CanvasGenerationExecution) {
     if (canvasImageGenerationHasPendingResult(sourceNode, canvasNodes)) {
-        showError("生成结果已保留，请重新加载资源");
+        showError(canvasImagePendingResultMessage(sourceNode, canvasNodes));
         return;
     }
     const expectedScope = captureUserScope();
@@ -64,14 +68,12 @@ export async function executeImageGeneration({
         showError(referenceLimitError);
         return;
     }
-    const count = getGenerationCount(generationConfig.count);
+    const nativeOutputCount = mergedImageCapabilityConfig(generationConfig, generationConfig.model || generationConfig.imageModel).fixedOutputs || 0;
+    const count = nativeOutputCount || getGenerationCount(generationConfig.count);
     const isConfigNode = sourceNode?.type === CanvasNodeType.Config;
     const isImageNode = sourceNode?.type === CanvasNodeType.Image;
     const isExistingImageNode = isImageNode && Boolean(sourceNode?.metadata?.content || sourceNode?.metadata?.storageKey);
     const reuseSourceNode = canGenerateImageInPlace(sourceNode);
-    const retired = reuseSourceNode && sourceNode ? retireImageBatchChildren(sourceNode, canvasNodes, canvasConnections) : { nodes: canvasNodes, connections: canvasConnections, removedIds: [] as string[] };
-    const workingNodes = retired.nodes;
-    const workingConnections = retired.connections;
     // 已有图片生成新结果并保留旧版本；参考图只来自入边，避免把旧结果误当成自身输入。
     const referenceImages = generationContext.referenceImages;
     const generationType = referenceImages.length ? ("edit" as const) : ("generation" as const);
@@ -91,7 +93,21 @@ export async function executeImageGeneration({
     const rootId = reuseSourceNode ? nodeId : nanoid();
     const childIds = count > 1 ? Array.from({ length: count }, () => nanoid()) : [];
     const targetIds = count > 1 ? childIds : [rootId];
-    registerPendingNodeIds(reuseSourceNode ? childIds : [rootId, ...childIds]);
+    if (onSubmissionPlan) {
+        if (!clientOperationId) throw new Error("生成提交缺少确认标识");
+        await onSubmissionPlan({ sourceNodeId: nodeId, submissions: nativeOutputCount
+            ? [{ operationId: clientOperationId, outputNodeIds: targetIds }]
+            : targetIds.map((id, index) => ({ operationId: count > 1 ? `${clientOperationId}:${index}` : clientOperationId, outputNodeIds: [id] })) });
+        assertUserScope(expectedScope);
+        controller.signal.throwIfAborted();
+        canvasNodes = nodesRef?.current || canvasNodes;
+        canvasConnections = useCanvasStore.getState().projects.find(project => project.id === projectId)?.connections || canvasConnections;
+        if (!canvasNodes.some(node => node.id === nodeId)) throw new Error("原节点已删除，未开始生成");
+    }
+    const retired = reuseSourceNode && sourceNode ? retireImageBatchChildren(sourceNode, canvasNodes, canvasConnections) : { nodes: canvasNodes, connections: canvasConnections, removedIds: [] as string[] };
+    const workingNodes = retired.nodes;
+    const workingConnections = retired.connections;
+    registerPendingNodeIds(reuseSourceNode && count > 1 ? childIds : [rootId, ...childIds]);
     const rootWidth = outputNodeSize.width;
     const rootHeight = outputNodeSize.height;
     const preferredPosition = {
@@ -100,6 +116,11 @@ export async function executeImageGeneration({
     };
     const rootPosition = reuseSourceNode ? parentPosition : findAvailableGenerationGroupPosition(workingNodes, preferredPosition, imageGenerationGroupSize({ width: rootWidth, height: rootHeight }, outputNodeSize, childIds.length));
 
+    const reusableRootMetadata = reuseSourceNode
+        ? count > 1
+            ? resetGenerationTaskMetadata(sourceNode?.metadata, NODE_STATUS_LOADING)
+            : clearInPlaceMediaOutputMetadata(sourceNode?.metadata)
+        : {};
     const rootNode: CanvasNodeData = {
         id: rootId,
         type: CanvasNodeType.Image,
@@ -108,17 +129,19 @@ export async function executeImageGeneration({
         width: rootWidth,
         height: rootHeight,
         metadata: mediaResultMetadata("generated", {
-            ...(reuseSourceNode ? sourceNode?.metadata || {} : {}),
+            ...reusableRootMetadata,
             ...canvasGenerationPromptMetadata(prompt, effectivePrompt),
             status: NODE_STATUS_LOADING,
             size: generationConfig.size,
             isBatchRoot: count > 1,
             batchChildIds: count > 1 ? childIds : undefined,
+            generationOutputNodeIds: count > 1 ? [...targetIds] : undefined,
             batchFailedCount: count > 1 ? 0 : undefined,
             batchUsesReferenceImages: referenceImages.length > 0,
             primaryImageId: undefined,
-            content: reuseSourceNode ? sourceNode?.metadata?.content : undefined,
+            ...(reuseSourceNode && count > 1 && sourceNode?.metadata?.content ? { content: sourceNode.metadata.content } : {}),
             ...generationMetadata,
+            taskOutputIndex: undefined,
             ...styleMetadata,
             ...skillMetadata,
             imageBatchExpanded: count > 1 ? true : undefined,
@@ -142,6 +165,7 @@ export async function executeImageGeneration({
             size: generationConfig.size,
             batchRootId: rootId,
             ...generationMetadata,
+            taskOutputIndex: nativeOutputCount ? index : undefined,
             ...styleMetadata,
             ...skillMetadata,
             generationErrorCode: undefined,
@@ -162,7 +186,7 @@ export async function executeImageGeneration({
         ...workingNodes.map((node) => {
             if (node.id !== nodeId) return node;
             if (isConfigNode) return { ...node, metadata: { ...node.metadata, ...canvasGenerationPromptMetadata(prompt, effectivePrompt), status: NODE_STATUS_LOADING, errorDetails: undefined } };
-            if (reuseSourceNode) return { ...node, position: rootNode.position, width: rootNode.width, height: rootNode.height, title: rootNode.title, metadata: { ...node.metadata, ...rootNode.metadata, errorDetails: undefined } };
+            if (reuseSourceNode) return rebaseCanvasGenerationTarget(node, rootNode, sourceNode);
             if (isImageNode) return node.metadata?.content ? node : { ...node, metadata: { ...node.metadata, status: NODE_STATUS_IDLE, errorDetails: undefined } };
             return {
                 ...node,
@@ -196,40 +220,78 @@ export async function executeImageGeneration({
     let representativeFailure: GenerationFailureMetadata | undefined;
     let abandoned = false;
     let saveFailureMessage: string | undefined;
+    let nativeTask: Promise<GenerationTask> | undefined;
+    let nativeBindTail = Promise.resolve();
     await Promise.all(
         targetIds.map(async (targetId, index) => {
             try {
                 const operationId = clientOperationId
-                    ? (count > 1 ? `${clientOperationId}:${index}` : clientOperationId)
+                    ? (count > 1 && !nativeOutputCount ? `${clientOperationId}:${index}` : clientOperationId)
                     : retryContext?.clientOperationId;
-                await runCanvasGenerationTaskToConsumer(
-                    {
-                        projectId,
-                        nodeId: targetId,
-                        expectedScope,
-                        ...retryContext,
-                        ...(operationId ? { clientOperationId: operationId } : {}),
-                        mode: "image",
-                        resolveReferenceLinks,
-                        prompt: effectivePrompt,
-                        config: { ...generationConfig, count: "1" },
-                        referenceImages,
-                        signal: controller.signal,
-                        metadata: {
-                            sourceNodeId: nodeId,
-                            ...taskContext,
-                            resolvedCharacterVersions: generationContext.resolvedCharacterVersions,
-                            promptTemplateOperation: sourceNode?.metadata?.promptTemplateOperation,
-                            promptTemplateVariables: sourceNode?.metadata?.promptTemplateVariables,
-                            ...styleMetadata,
-                            ...skillMetadata,
+                if (nativeOutputCount) {
+                    // One paid task owns all candidates. Keep its identity on every
+                    // placeholder so a reload retrieves that task instead of creating it again.
+                    nativeTask ??= (async () => {
+                        let completed: GenerationTask | undefined;
+                        await runCanvasGenerationTaskToConsumer(
+                            {
+                                projectId, nodeId: targetIds[0], expectedScope, ...retryContext,
+                                ...(operationId ? { clientOperationId: operationId } : {}),
+                                mode: "image", resolveReferenceLinks, prompt: effectivePrompt,
+                                config: { ...generationConfig, count: String(nativeOutputCount) }, referenceImages,
+                                signal: controller.signal,
+                                metadata: { sourceNodeId: nodeId, ...taskContext, outputNodeIds: targetIds, resolvedCharacterVersions: generationContext.resolvedCharacterVersions, promptTemplateOperation: sourceNode?.metadata?.promptTemplateOperation, promptTemplateVariables: sourceNode?.metadata?.promptTemplateVariables, ...styleMetadata, ...skillMetadata },
+                            },
+                            {
+                                bindTask: (task) => [rootId, ...targetIds].forEach((id) => bindGenerationTask(id, task)),
+                                consumeTask: async (task) => { completed = task; },
+                                isCurrent,
+                                onSubmission: (metadata) => {
+                                    if (!isCurrent()) return;
+                                    projectCanvasGenerationSubmission(nodesRef, setNodes, [rootId, ...targetIds], metadata);
+                                    if (projectId) useCanvasStore.getState().updateProject(projectId, { nodes: nodesRef.current });
+                                },
+                            },
+                        );
+                        if (!completed) throw new Error("生成任务缺少成功终态");
+                        return completed;
+                    })();
+                    const completed = await nativeTask;
+                    const binding = nativeBindTail.then(() => applyGenerationTaskResult(targetId, completed));
+                    nativeBindTail = binding.catch(() => {});
+                    await binding;
+                } else {
+                    await runCanvasGenerationTaskToConsumer(
+                        {
+                            projectId,
+                            nodeId: targetId,
+                            expectedScope,
+                            ...retryContext,
+                            ...(operationId ? { clientOperationId: operationId } : {}),
+                            mode: "image",
+                            resolveReferenceLinks,
+                            prompt: effectivePrompt,
+                            config: { ...generationConfig, count: "1" },
+                            referenceImages,
+                            signal: controller.signal,
+                            metadata: {
+                                sourceNodeId: nodeId,
+                                ...taskContext,
+                                resolvedCharacterVersions: generationContext.resolvedCharacterVersions,
+                                promptTemplateOperation: sourceNode?.metadata?.promptTemplateOperation,
+                                promptTemplateVariables: sourceNode?.metadata?.promptTemplateVariables,
+                                ...styleMetadata,
+                                ...skillMetadata,
+                            },
                         },
-                    },
-                    {
-                        bindTask: (task) => bindGenerationTask(targetId, task),
-                        consumeTask: (task) => applyGenerationTaskResult(targetId, task),
-                    },
-                );
+                        {
+                            onSubmission: (metadata) => projectCanvasGenerationSubmission(nodesRef, setNodes, [targetId], metadata),
+                            bindTask: (task) => bindGenerationTask(targetId, task),
+                            consumeTask: (task) => applyGenerationTaskResult(targetId, task),
+                            isCurrent,
+                        },
+                    );
+                }
                 if (!isCurrent()) return false;
                 if (targetId !== rootId) {
                     setNodes((current) => {
@@ -297,6 +359,21 @@ export async function executeImageGeneration({
     if (abandoned || !userScopeMatches(expectedScope)) return;
     if (controller.signal.aborted) {
         setNodes((current) => {
+            const ids = new Set([rootId, ...childIds]);
+            if (nativeOutputCount && current.some((node) => ids.has(node.id) && (node.metadata?.taskId || node.metadata?.taskClientOperationId) && node.metadata?.generationSubmissionState !== "rejected")) {
+                const next = current.map((node) => ids.has(node.id) && (node.id === rootId || !node.metadata?.content) ? {
+                    ...node,
+                    metadata: {
+                        ...node.metadata,
+                        status: node.metadata?.content ? NODE_STATUS_SUCCESS : NODE_STATUS_ERROR,
+                        resourceReloadAvailable: true,
+                        generationSubmissionState: node.metadata?.taskId ? "accepted" as const : "unknown" as const,
+                        errorDetails: "已停止等待，任务已保留，请继续查询原任务",
+                    },
+                } : node);
+                if (projectId) useCanvasStore.getState().updateProject(projectId, { nodes: next });
+                return next;
+            }
             const cancelled = cancelIncompleteImageBatch(rootId, childIds, current, []);
             if (cancelled.removedIds.length) {
                 const removed = new Set(cancelled.removedIds);
@@ -306,7 +383,7 @@ export async function executeImageGeneration({
         });
         return;
     }
-    if (hasFailure) showError(representativeFailure?.generationErrorCode === "canvas_conflict" ? "生成结果已保留，请重新加载资源" : saveFailureMessage || (hasSuccess ? "部分图片生成失败" : "全部图片生成失败"));
+    if (hasFailure) showError(isKeptGenerationResultCode(representativeFailure?.generationErrorCode) ? representativeFailure?.errorDetails || "生成结果已保留，请点击「继续取回」" : saveFailureMessage || (hasSuccess ? "部分图片生成失败" : "全部图片生成失败"));
     setNodes((current) => {
         const next = current.map((node) => {
             if (node.id === nodeId && isConfigNode) {

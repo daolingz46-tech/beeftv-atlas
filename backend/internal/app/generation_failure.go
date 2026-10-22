@@ -25,6 +25,18 @@ func applyAppFailureWrappers(err error, failure generation.Failure) generation.F
 		failure.Uncertain = true
 		failure.Reason = "图片结果尚未确认，自动恢复已停止"
 		failure.Action = "请保留任务记录并联系支持查询结果，不要重复提交"
+		var preparation imagePreparationError
+		if errors.As(err, &preparation) {
+			failure.Reason = "图片提交记录无法确认，自动恢复已停止"
+		}
+		return failure
+	}
+	var preparation imagePreparationError
+	if errors.As(err, &preparation) {
+		failure = generation.ClassifyError(preparation.cause)
+		failure.Uncertain, failure.Retryable = false, false
+		failure.Reason = preparation.Error()
+		failure.Action = "请保留排查信息并联系支持检查本地任务记录"
 		return failure
 	}
 	var unknown providerSubmissionUnknownError
@@ -72,6 +84,9 @@ func taskFailureErrorCode(err error) string {
 }
 
 func persistedFailureErrorCode(message string, stage string) string {
+	if stage == taskStageRequestNotSent {
+		return string(generation.CategoryRequestNotSent)
+	}
 	failure := generation.ClassifyText(message)
 	if stage == "submission_unknown" {
 		return string(generation.CategorySubmissionUncertain)
@@ -80,10 +95,13 @@ func persistedFailureErrorCode(message string, stage string) string {
 }
 
 func persistedFailureBlocksRetry(message string, stage string) bool {
+	if stage == taskStageRequestNotSent {
+		return false
+	}
 	if stage == "submission_unknown" {
 		return true
 	}
-	return generation.ClassifyText(message).BlocksAutomaticRetry()
+	return generation.ClassifyText(message).BlocksManualRetry()
 }
 
 func (s *Service) UserFacingProviderHTTPError(status int, statusText string, body string) string {

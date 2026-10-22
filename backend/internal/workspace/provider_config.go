@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -133,7 +134,8 @@ func (s *ProviderConfig) SaveLocalModelConfig(body []byte) error {
 	if err != nil {
 		return err
 	}
-	return s.saveLocalModelConfig(body, existingDocument)
+	_, err = s.saveLocalModelConfig(body, existingDocument)
+	return err
 }
 
 func (s *ProviderConfig) SaveLocalModelConfigRevision(body []byte, expectedRevision int64) (int64, error) {
@@ -146,10 +148,7 @@ func (s *ProviderConfig) SaveLocalModelConfigRevision(body []byte, expectedRevis
 	if existingDocument.Revision != expectedRevision {
 		return existingDocument.Revision, ErrProviderConfigRevisionConflict
 	}
-	if err := s.saveLocalModelConfig(body, existingDocument); err != nil {
-		return existingDocument.Revision, err
-	}
-	return existingDocument.Revision + 1, nil
+	return s.saveLocalModelConfig(body, existingDocument)
 }
 
 // SaveCatalogWithAssistantDefault records initialization with the config atomically.
@@ -172,30 +171,49 @@ func (s *ProviderConfig) SaveCatalogWithAssistantDefault(body []byte, authorizat
 		document.AssistantDefaultAuthorization = authorizationID
 	} else if document.Config != nil {
 		// A catalog read may predate a concurrent explicit selection.
-		incoming["assistantModel"] = document.Config["assistantModel"]
+		if selected, exists := document.Config["assistantModel"]; exists {
+			incoming["assistantModel"] = selected
+		} else {
+			delete(incoming, "assistantModel")
+		}
 	}
 	body, err = json.Marshal(incoming)
 	if err != nil {
 		return err
 	}
-	return s.saveLocalModelConfig(body, document)
+	_, err = s.saveLocalModelConfig(body, document)
+	return err
 }
 
-func (s *ProviderConfig) saveLocalModelConfig(body []byte, existingDocument ProviderStateDocument) error {
+func (s *ProviderConfig) saveLocalModelConfig(body []byte, existingDocument ProviderStateDocument) (int64, error) {
 	if len(body) == 0 || len(body) > 2<<20 {
-		return errors.New("本地模型配置大小无效")
+		return existingDocument.Revision, errors.New("本地模型配置大小无效")
 	}
 	incoming, err := decodeIncomingConfig(body)
 	if err != nil {
-		return err
+		return existingDocument.Revision, err
 	}
 	if existingDocument.Config != nil {
 		if err := preserveSecrets(incoming, existingDocument.Config); err != nil {
-			return err
+			return existingDocument.Revision, err
 		}
 	}
-	document := newProviderState(incoming, existingDocument.Revision+1)
+	revision := existingDocument.Revision
+	if !reflect.DeepEqual(incoming, existingDocument.Config) {
+		revision++
+	}
+	document := newProviderState(incoming, revision)
 	document.AssistantDefaultAuthorization = existingDocument.AssistantDefaultAuthorization
+	// Authorization initialization and encryption migration still persist even
+	// when generation settings have not changed.
+	if err := s.writeDocument(document); err != nil {
+		return existingDocument.Revision, err
+	}
+	return revision, nil
+}
+
+// Caller holds s.mu; encryption-only migration preserves the CAS revision.
+func (s *ProviderConfig) writeDocument(document ProviderStateDocument) error {
 	canonical, err := s.encodeStoredDocument(document)
 	if err != nil {
 		return fmt.Errorf("编码本地模型配置失败: %w", err)
@@ -264,7 +282,18 @@ func (s *ProviderConfig) LoadEffectiveModelConfig() (EffectiveModelConfig, Confi
 func (s *ProviderConfig) loadDocument() (ProviderStateDocument, ConfigHealth, error) {
 	body, err := os.ReadFile(s.path())
 	if errors.Is(err, os.ErrNotExist) {
-		return newProviderState(map[string]any{}, 0), ConfigHealthDefault, nil
+		backup, backupErr := os.ReadFile(s.backupPath())
+		if errors.Is(backupErr, os.ErrNotExist) {
+			return newProviderState(map[string]any{}, 0), ConfigHealthDefault, nil
+		}
+		if backupErr != nil {
+			return ProviderStateDocument{}, ConfigHealthReady, fmt.Errorf("读取模型配置备份失败: %w", backupErr)
+		}
+		document, _, decodeErr := s.decodeStoredDocument(backup)
+		if decodeErr != nil {
+			return ProviderStateDocument{}, ConfigHealthReady, fmt.Errorf("模型配置缺失且备份损坏: %w", decodeErr)
+		}
+		return document, ConfigHealthRecovered, nil
 	}
 	if err != nil {
 		return ProviderStateDocument{}, ConfigHealthReady, fmt.Errorf("读取本地模型配置失败: %w", err)
@@ -272,6 +301,9 @@ func (s *ProviderConfig) loadDocument() (ProviderStateDocument, ConfigHealth, er
 	document, migrated, decodeErr := s.decodeStoredDocument(body)
 	if decodeErr == nil {
 		if migrated {
+			if err := s.writeDocument(document); err != nil {
+				return ProviderStateDocument{}, ConfigHealthReady, fmt.Errorf("加密旧模型配置失败: %w", err)
+			}
 			return document, ConfigHealthMigrated, nil
 		}
 		return document, ConfigHealthReady, nil
@@ -290,7 +322,8 @@ func (s *ProviderConfig) loadDocument() (ProviderStateDocument, ConfigHealth, er
 func (s *ProviderConfig) loadPrimaryDocument() (ProviderStateDocument, error) {
 	body, err := os.ReadFile(s.path())
 	if errors.Is(err, os.ErrNotExist) {
-		return newProviderState(map[string]any{}, 0), nil
+		document, _, recoverErr := s.loadDocument()
+		return document, recoverErr
 	}
 	if err != nil {
 		return ProviderStateDocument{}, fmt.Errorf("读取本地模型配置失败: %w", err)
@@ -408,7 +441,7 @@ func (s *ProviderConfig) decodeStoredDocument(body []byte) (ProviderStateDocumen
 			return ProviderStateDocument{}, false, errors.New("本地模型配置密文缺失")
 		}
 		document, _, err := decodeProviderDocument(body)
-		return document, true, err // The next canonical save migrates plaintext.
+		return document, true, err
 	}
 	plain, err := localcrypto.Decrypt(s.dataDir, envelope.EncryptedConfig)
 	if err != nil {

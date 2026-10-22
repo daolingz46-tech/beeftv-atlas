@@ -34,6 +34,7 @@ type ImageCapabilityConfig struct {
 	ResponseFormat        ParameterSupport     `json:"responseFormat"`
 	OutputFormat          ParameterSupport     `json:"outputFormat"`
 	MaxOutputs            int                  `json:"maxOutputs"`
+	FixedOutputs          int                  `json:"fixedOutputs,omitempty"`
 }
 
 type ImageReferenceConfig struct {
@@ -123,12 +124,14 @@ type VideoReferenceConfig struct {
 const DefaultVideoPromptMaxChars = 8000
 
 type VideoDurationConfig struct {
-	Selection string `json:"selection"`
-	Min       int    `json:"min,omitempty"`
-	Max       int    `json:"max,omitempty"`
-	Step      int    `json:"step,omitempty"`
-	Values    []int  `json:"values,omitempty"`
-	Default   int    `json:"default"`
+	Selection     string  `json:"selection"`
+	Min           int     `json:"min,omitempty"`
+	Max           int     `json:"max,omitempty"`
+	Step          int     `json:"step,omitempty"`
+	FractionalMin float64 `json:"fractionalMin,omitempty"`
+	Continuous    bool    `json:"continuous,omitempty"`
+	Values        []int   `json:"values,omitempty"`
+	Default       int     `json:"default"`
 }
 
 type VideoBooleanConfig struct {
@@ -200,6 +203,8 @@ type PublicChannelModel struct {
 	Capability       string                     `json:"capability"`
 	Protocol         model.ChannelInterfaceType `json:"protocol"`
 	CapabilityConfig map[string]any             `json:"capabilityConfig,omitempty"`
+	VideoPricing     map[string]any             `json:"videoPricing,omitempty"`
+	AudioOptions     *AudioGenerationOptions    `json:"audioOptions,omitempty"`
 	Available        bool                       `json:"available"`
 }
 

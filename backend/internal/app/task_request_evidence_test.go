@@ -33,7 +33,11 @@ func TestTaskRequestEvidenceHTTPToRestoredList(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("X-Request-Id", "req-real-header")
+				header := "X-Request-Id"
+				if tc.name == "business_error" {
+					header = "X-Oneapi-Request-Id"
+				}
+				w.Header().Set(header, "req-real-header")
 				w.WriteHeader(tc.status)
 				_, _ = w.Write([]byte(tc.body))
 			}))
@@ -208,7 +212,7 @@ func TestNilServiceAnalyticsRecordsHTTPEvidenceAndKeepsImageFailClosed(t *testin
 		t.Fatalf("nil-service evidence %+v", d)
 	}
 
-	expired, cancel := context.WithTimeout(ctx, 0)
+	expired, cancel := context.WithTimeout(generation.WithImageReplayProtocol(ctx, generation.ImageReplayProtocol), 0)
 	cancel()
 	beef, err := http.NewRequestWithContext(expired, http.MethodPost, "https://beefapi.com/v1/images/generations", strings.NewReader(`{"prompt":"draw"}`))
 	if err != nil {

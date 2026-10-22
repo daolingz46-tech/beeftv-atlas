@@ -29,6 +29,8 @@ const (
 	CategoryModerationOutput    FailureCategory = "moderation_output"
 	CategoryInvalidParams       FailureCategory = "invalid_params"
 	CategoryLocalStorage        FailureCategory = "local_storage"
+	CategoryLocalDiskFull       FailureCategory = "local_disk_full"
+	CategoryLocalCredential     FailureCategory = "local_credential"
 	CategoryContextTooLong      FailureCategory = "context_too_long"
 	CategoryInputInaccessible   FailureCategory = "input_inaccessible"
 	CategoryInputTooLarge       FailureCategory = "input_too_large"
@@ -37,6 +39,7 @@ const (
 	CategoryConcurrency         FailureCategory = "concurrency"
 	CategoryProviderUnavailable FailureCategory = "provider_unavailable"
 	CategoryNetwork             FailureCategory = "network"
+	CategoryRequestNotSent      FailureCategory = "request_not_sent"
 	CategoryTimeout             FailureCategory = "timeout"
 	CategorySubmissionUncertain FailureCategory = "submission_uncertain"
 	CategoryAsyncFailed         FailureCategory = "async_failed"
@@ -80,6 +83,8 @@ type categoryCopy struct {
 }
 
 var categoryCopies = map[FailureCategory]categoryCopy{
+	CategoryLocalDiskFull:       {Reason: "本地磁盘空间不足，无法保存数据", Action: "请清理 BeefTV 数据目录所在磁盘；已有生成结果请优先取回原任务，不要重复生成"},
+	CategoryLocalCredential:     {Reason: "本地算力凭据读取失败", Action: "请检查工作区数据目录并重新连接算力账号；不要删除工作区密钥"},
 	CategoryAuth:                {Reason: "模型服务鉴权失败", Action: "请检查 API Key 后重试"},
 	CategoryPermission:          {Reason: "当前渠道没有使用该模型的权限", Action: "请更换模型或检查渠道权限"},
 	CategoryQuotaUser:           {Reason: "当前账号可用额度不足", Action: "请检查账号余额，补充额度或调整令牌、套餐额度后重试"},
@@ -99,6 +104,7 @@ var categoryCopies = map[FailureCategory]categoryCopy{
 	CategoryConcurrency:         {Reason: "同时进行的生成过多", Action: "请等待已有任务完成后再试"},
 	CategoryProviderUnavailable: {Reason: "模型服务暂时不可用", Action: "请稍后重试"},
 	CategoryNetwork:             {Reason: "网络连接失败", Action: "请检查网络并核对原任务状态后，再决定是否重新生成"},
+	CategoryRequestNotSent:      {Reason: "未能连接服务，本次请求尚未提交", Action: "请检查网络或代理后重试"},
 	CategoryTimeout:             {Reason: "模型服务响应超时", Action: "请稍后查询原任务，不要立即重新提交"},
 	CategorySubmissionUncertain: {Reason: "提交结果尚未确认，上游任务可能仍在执行", Action: "请先查询原任务状态，不要立即重新提交"},
 	CategoryAsyncFailed:         {Reason: "生成任务没有完成", Action: "请查看详情后决定是否重试"},
@@ -134,6 +140,12 @@ var (
 )
 
 var providerCodeCategories = map[string]FailureCategory{
+	"contentmoderationfailed":           CategoryModerationInput,
+	"invalidparameter.voilationcontent": CategoryModerationInput,
+	"invalidparameter.violationcontent": CategoryModerationInput,
+
+	"local_disk_full":                  CategoryLocalDiskFull,
+	"local_credential_failed":          CategoryLocalCredential,
 	"local_storage_failed":             CategoryLocalStorage,
 	"contentsecuritydetectionerror":    CategoryProviderUnavailable,
 	"accountoverdueerror":              CategoryQuotaUpstream,
@@ -267,6 +279,9 @@ var providerCodeCategories = map[string]FailureCategory{
 	"pre_consume_token_quota_failed":       CategoryUnknown,
 	"upstream_crowded":                     CategoryThrottled,
 	"upstream_unavailable":                 CategoryProviderUnavailable,
+	"image_reference_upload_failed":        CategoryProviderUnavailable,
+	"reference_media_upload_failed":        CategoryProviderUnavailable,
+	"reference_preupload_failed":           CategoryProviderUnavailable,
 	"upstream_rejected":                    CategoryUnknown,
 	"upstream_error":                       CategoryUnknown,
 }
@@ -292,11 +307,12 @@ func (f Failure) IsModeration() bool {
 }
 
 func (f Failure) BlocksAutomaticRetry() bool {
-	if f.Uncertain {
+	_, preparation := referencePreparationCopies[f.ProviderCode]
+	if f.Uncertain || preparation {
 		return true
 	}
 	switch f.Category {
-	case CategoryThrottled, CategoryConcurrency, CategoryProviderUnavailable, CategoryCancelled:
+	case CategoryThrottled, CategoryConcurrency, CategoryProviderUnavailable, CategoryCancelled, CategoryRequestNotSent:
 		return false
 	default:
 		return true
@@ -370,7 +386,17 @@ func (e PayloadError) Error() string {
 }
 
 func ClassifyHTTP(status int, statusText string, body string) Failure {
+	fields := extractProviderFields(body)
+	if _, persisted := persistedReferencePreparationFailure(firstNonEmpty(fields.Message, body)); persisted {
+		// Only the typed transport boundary may attest an unsent request. A
+		// provider response cannot grant that proof by echoing our saved copy.
+		return normalizeFailure(Failure{Category: CategorySubmissionUncertain, HTTPStatus: status, ProviderCode: sanitizeProviderCode(fields.Code)})
+	}
 	failure := ClassifyText(body)
+	// This boundary handles provider responses, not local filesystem errors.
+	if failure.Category == CategoryLocalDiskFull || failure.Category == CategoryLocalCredential {
+		failure = Failure{Category: CategoryUnknown}
+	}
 	failure.HTTPStatus = status
 	// Reservation failures also use HTTP 503; only explicit funding rejection identifies caller quota.
 	if status == 402 && failure.ProviderCode == "video_reservation_failed" && strings.HasPrefix(failure.ProviderMessage, "insufficient balance for this video request") {
@@ -419,8 +445,56 @@ func ClassifyError(err error) Failure {
 	if err == nil {
 		return normalizeFailure(Failure{Category: CategoryUnknown})
 	}
+	var unknown SubmissionUnknownError
+	if errors.As(err, &unknown) {
+		return normalizeFailure(Failure{Category: CategorySubmissionUncertain, Uncertain: true, Retryable: false})
+	}
+	var protocolPreparation ProtocolPreparationError
+	if errors.As(err, &protocolPreparation) {
+		return normalizeFailure(Failure{Category: CategoryModelMissing, Reason: protocolPreparation.Error(), Action: "本次请求尚未提交，请检查所选模型的插件是否已安装、启用并支持该生成类型"})
+	}
 	if errors.Is(err, context.Canceled) {
 		return normalizeFailure(Failure{Category: CategoryCancelled})
+	}
+	var referenceUpload *ReferenceUploadError
+	if errors.As(err, &referenceUpload) {
+		if referenceUpload.Meta.Stage != "put" && (referenceUpload.HTTPStatus == 400 || referenceUpload.HTTPStatus == 401 || referenceUpload.HTTPStatus == 402 || referenceUpload.HTTPStatus == 403) {
+			failure := ClassifyError(referenceUpload.Cause)
+			failure.RequestID = firstNonEmpty(referenceUpload.RequestID, failure.RequestID)
+			return failure
+		}
+		copy := referencePreparationCopies["reference_preupload_failed"]
+		failure := normalizeFailure(Failure{Category: CategoryProviderUnavailable, ProviderCode: "reference_preupload_failed",
+			Reason: copy.reason, Action: copy.action, HTTPStatus: referenceUpload.HTTPStatus, RequestID: referenceUpload.RequestID})
+		failure.Retryable = false
+		return failure
+	}
+	var notSent RequestNotSentError
+	if errors.As(err, &notSent) {
+		return normalizeFailure(Failure{Category: CategoryRequestNotSent})
+	}
+	var preparation RequestPreparationError
+	if errors.As(err, &preparation) {
+		var storage ReferenceStoragePreparationError
+		if errors.As(preparation.Cause, &storage) {
+			failure := normalizeFailure(Failure{Category: CategoryProviderUnavailable, ProviderCode: "reference_media_upload_failed", Reason: "参考素材上传失败，本次尚未开始生成", Action: "请检查对象存储配置和公开读取权限后重试"})
+			failure.Retryable = false
+			return failure
+		}
+		failure := classifyHTTPErrorCause(preparation.Cause)
+		if failure.ProviderCode == "image_reference_upload_failed" {
+			failure.Category = CategoryProviderUnavailable
+			failure.Uncertain = false
+			failure.Reason = "参考图片上传失败，本次尚未开始生成"
+			failure.Action = "请稍后重试"
+			failure = normalizeFailure(failure)
+			failure.Retryable = false
+			return failure
+		}
+		return normalizeFailure(Failure{Category: CategoryInputInaccessible, Reason: "本次请求在准备时失败，未发送到模型服务", Action: "请检查参考素材和生成参数后重试"})
+	}
+	if _, echoed := persistedReferencePreparationFailure(err.Error()); echoed {
+		return normalizeFailure(Failure{Category: CategorySubmissionUncertain})
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return normalizeFailure(Failure{Category: CategoryTimeout, Uncertain: true, Reason: "模型服务响应超时，请求可能仍在执行", Action: "请先查询原任务，不要立即重新提交"})
@@ -442,10 +516,6 @@ func ClassifyError(err error) Failure {
 		}
 		return normalizeFailure(failure)
 	}
-	var unknown SubmissionUnknownError
-	if errors.As(err, &unknown) {
-		return normalizeFailure(Failure{Category: CategorySubmissionUncertain, Uncertain: true, Retryable: false})
-	}
 	var pending StatePendingError
 	if errors.As(err, &pending) {
 		failure := classifyHTTPErrorCause(pending.Cause)
@@ -463,6 +533,10 @@ func ClassifyError(err error) Failure {
 	var payload PayloadError
 	if errors.As(err, &payload) {
 		raw := firstNonEmpty(payload.raw, payload.message)
+		fields := extractProviderFields(raw)
+		if _, echoed := persistedReferencePreparationFailure(firstNonEmpty(fields.Message, raw)); echoed {
+			return normalizeFailure(Failure{Category: CategorySubmissionUncertain})
+		}
 		failure := ClassifyText(raw)
 		if payload.message != "" && failure.Category == CategoryUnknown && !failure.Structured {
 			return ClassifyText(payload.message)
@@ -473,6 +547,9 @@ func ClassifyError(err error) Failure {
 }
 
 func ClassifyText(raw string) Failure {
+	if failure, ok := persistedReferencePreparationFailure(raw); ok {
+		return failure
+	}
 	if copy, ok := persistedTaskConstraintCopy(raw); ok {
 		requestID, taskID := persistedReferenceIDs(raw)
 		return normalizeFailure(Failure{Category: CategoryInvalidParams, Reason: copy.Reason, Action: copy.Action, RequestID: requestID, TaskID: taskID})
@@ -505,6 +582,14 @@ func ClassifyText(raw string) Failure {
 		return normalizeFailure(Failure{Category: CategoryMalformedResponse})
 	}
 	fields := extractProviderFields(text)
+	vodText := text
+	if fields.hasStructured() || strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[") {
+		vodText = fields.Message
+	}
+	if copy, ok := vodImageErrorCopy(fields.Code, vodText); ok {
+		copy.RequestID, copy.TaskID = sanitizeDebugID(fields.RequestID), sanitizeDebugID(fields.TaskID)
+		return normalizeFailure(copy)
+	}
 	// Inspect only the error message, never JSON request echoes or debug fields.
 	databaseMessage := text
 	if fields.hasStructured() || strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[") {
@@ -513,7 +598,13 @@ func ClassifyText(raw string) Failure {
 	if localDatabaseErrorPattern.MatchString(databaseMessage) {
 		return normalizeFailure(Failure{Category: CategoryLocalStorage, FromCode: true, RequestID: sanitizeDebugID(fields.RequestID), TaskID: sanitizeDebugID(fields.TaskID)})
 	}
+	if isLocalDiskFullMessage(databaseMessage) {
+		return normalizeFailure(Failure{Category: CategoryLocalDiskFull, FromCode: true})
+	}
 	if fields.hasStructured() {
+		if strings.Contains(fields.Message, "暂无可用渠道") || strings.Contains(fields.Message, "无可用渠道") {
+			return normalizeFailure(Failure{Category: CategoryProviderUnavailable, Structured: true, ProviderCode: sanitizeProviderCode(fields.Code), ProviderMessage: sanitizeProviderText(fields.Message), RequestID: fields.RequestID})
+		}
 		if strings.EqualFold(fields.Code, "invalid_reference_audio") {
 			copy, _ := referenceAudioCopy(fields.Message, true)
 			return normalizeFailure(Failure{Category: CategoryInvalidParams, Reason: copy.Reason, Action: copy.Action, RequestID: fields.RequestID, TaskID: fields.TaskID, ProviderCode: fields.Code, Structured: true, FromCode: true})
@@ -627,7 +718,18 @@ func ClassifyAppError(status int, code int, reason string, message string) Failu
 	return normalizeFailure(failure)
 }
 
+func isLocalDiskFullMessage(message string) bool {
+	text := strings.ToLower(message)
+	local := strings.Contains(text, "write local resource") || strings.Contains(text, "生成内容写入资源存储失败") || strings.Contains(text, "database or disk is full") || strings.Contains(text, "本地磁盘空间不足")
+	full := strings.Contains(text, "no space left on device") || strings.Contains(text, "not enough space on the disk") || strings.Contains(text, "disk full") || strings.Contains(text, "database or disk is full") || strings.Contains(text, "本地磁盘空间不足")
+	return local && full
+}
+
 func WithDownloadFailure(failure Failure, taskID string) Failure {
+	if failure.Category == CategoryLocalDiskFull || failure.Category == CategoryLocalCredential || failure.Category == CategoryLocalStorage {
+		failure.TaskID = firstNonEmpty(failure.TaskID, taskID)
+		return normalizeFailure(failure)
+	}
 	if failure.Category == CategoryAuth || failure.Category == CategoryPermission || failure.IsModeration() || failure.Category == CategoryInvalidParams || failure.Category == CategoryDeliveryFailed {
 		failure.TaskID = firstNonEmpty(failure.TaskID, taskID)
 		return normalizeFailure(failure)
@@ -929,6 +1031,9 @@ func categoryFromProviderMessage(raw string) (FailureCategory, bool) {
 }
 
 func containsContentSafety(normalized string) bool {
+	if strings.Contains(normalized, "rejected by the safety system") || strings.Contains(normalized, "rejected as a result of our safety system") || strings.Contains(normalized, "rejected as a result of the safety system") || strings.Contains(normalized, "contentmoderationfailed") || strings.Contains(normalized, "invalidparameter.voilationcontent") || strings.Contains(normalized, "invalidparameter.violationcontent") || strings.Contains(normalized, "上游内容安全策略") {
+		return true
+	}
 	if strings.Contains(normalized, "sensitive_words_detected") || strings.Contains(normalized, "content policy") || strings.Contains(normalized, "content safety") || strings.Contains(normalized, "safety policy") || strings.Contains(normalized, "data inspection") || strings.Contains(normalized, "prohibited_content") || strings.Contains(normalized, "内容安全审核") || strings.Contains(normalized, "内容审核未通过") {
 		return true
 	}
@@ -1295,6 +1400,11 @@ func isNetworkText(value string) bool {
 func outboundPolicyCopy(message string) (categoryCopy, bool) {
 	message, _, _ = strings.Cut(strings.TrimSpace(message), "。")
 	switch message {
+	case "不允许访问链路本地、未指定或组播地址":
+		return categoryCopy{
+			Reason: "模型服务地址被出站安全策略拦截",
+			Action: "该地址属于链路本地或云主机元数据网段，允许列表也不能放行。请改用回环或局域网地址",
+		}, true
 	case "不允许访问本机或内网地址", "不允许访问本机、内网或链路本地地址", "不允许访问保留地址或特殊用途地址":
 		return categoryCopy{
 			Reason: "模型服务地址被出站安全策略拦截",
@@ -1414,7 +1524,7 @@ func sanitizeProviderText(value string) string {
 
 func applyRetryable(failure *Failure) {
 	switch failure.Category {
-	case CategoryThrottled, CategoryProviderUnavailable, CategoryNetwork, CategoryTimeout, CategoryConcurrency:
+	case CategoryThrottled, CategoryProviderUnavailable, CategoryNetwork, CategoryTimeout, CategoryConcurrency, CategoryRequestNotSent:
 		failure.Retryable = !failure.Uncertain
 	default:
 		failure.Retryable = false

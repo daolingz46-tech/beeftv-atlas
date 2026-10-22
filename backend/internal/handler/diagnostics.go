@@ -11,6 +11,22 @@ import (
 )
 
 func RegisterDiagnosticsRoutes(r *gin.RouterGroup, svc *app.Service) {
+	r.POST("/diagnostics/environment", func(c *gin.Context) {
+		if _, err := currentUser(c, svc); err != nil {
+			failService(c, err)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1024)
+		var req struct {
+			Repair bool `json:"repair"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		c.Header("Cache-Control", "private, no-store")
+		ok(c, requestDiagnostics(c, svc).CheckEnvironment(c.Request.Context(), req.Repair))
+	})
 	r.POST("/diagnostics/preview", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {
@@ -51,7 +67,7 @@ func RegisterDiagnosticsRoutes(r *gin.RouterGroup, svc *app.Service) {
 		c.Header("Cache-Control", "private, no-store")
 		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", bundle.FileName))
 		c.Header("X-Diagnostic-Bundle-ID", bundle.BundleID)
-		c.Header("X-Diagnostic-Schema-Version", "1")
+		c.Header("X-Diagnostic-Schema-Version", fmt.Sprint(diagnostics.SchemaVersion))
 		c.Data(http.StatusOK, "application/zip", bundle.Data)
 	})
 
