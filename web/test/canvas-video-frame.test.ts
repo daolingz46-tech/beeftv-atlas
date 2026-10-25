@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { buildVideoFrameNodes } from "../src/lib/canvas/canvas-video-frame-nodes";
-import { normalizeVideoFrameTimes, resolveVideoFramePresetTimeMs, videoFrameFetchCredentials, videoFrameSeekSeconds, waitForPresentedVideoFrame } from "../src/lib/canvas/canvas-video-frame";
+import { normalizeVideoFrameTimes, planVideoFrameInterval, MAX_VIDEO_FRAME_BATCH, resolveVideoFramePresetTimeMs, videoFrameFetchCredentials, videoFrameSeekSeconds, waitForPresentedVideoFrame } from "../src/lib/canvas/canvas-video-frame";
 import { CanvasNodeType, type CanvasNodeData } from "../src/types/canvas";
 
 const sourceNode: CanvasNodeData = {
@@ -13,6 +13,28 @@ const sourceNode: CanvasNodeData = {
     height: 360,
     metadata: { workflowKind: "shot", workflowTitle: "镜头 1", shotIndex: 1 },
 };
+
+describe("按时间间隔抽帧", () => {
+    test("每秒一帧覆盖整段视频，不把终点重复当成一帧", () => {
+        expect(planVideoFrameInterval(4000, 1000)).toEqual({ count: 4, timesMs: [0, 1000, 2000, 3000], error: "" });
+        expect(planVideoFrameInterval(4500, 1000).timesMs).toEqual([0, 1000, 2000, 3000, 4000]);
+    });
+    test("小数间隔没有累计误差，短视频和最大间隔都能提取", () => {
+        expect(planVideoFrameInterval(1000, 300).timesMs).toEqual([0, 300, 600, 900]);
+        expect(planVideoFrameInterval(50, 50).timesMs).toEqual([0]);
+        expect(planVideoFrameInterval(1000, 1000).timesMs).toEqual([0]);
+    });
+    test("无效或超量参数明确拒绝，不静默截断视频", () => {
+        for (const value of [0, -1, NaN, Infinity]) {
+            expect(planVideoFrameInterval(1000, value).error).not.toBe("");
+            expect(planVideoFrameInterval(value, 1000).timesMs).toEqual([]);
+        }
+        expect(planVideoFrameInterval(MAX_VIDEO_FRAME_BATCH * 1000, 1000).count).toBe(MAX_VIDEO_FRAME_BATCH);
+        const tooMany = planVideoFrameInterval((MAX_VIDEO_FRAME_BATCH + 1) * 1000, 1000);
+        expect(tooMany.error).toContain("请增大间隔");
+        expect(tooMany.timesMs).toEqual([]);
+    });
+});
 
 describe("normalizeVideoFrameTimes", () => {
     test("按时间排序、去重并限制在可解码范围内", () => {

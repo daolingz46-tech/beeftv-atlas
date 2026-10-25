@@ -46,7 +46,7 @@ import { mediaResultMetadata } from "@/lib/canvas/canvas-node-semantics";
 import { attachOwnedDepthCaptureResult, recoverOwnedDepthCaptureNode, recoverOwnedDepthCaptureNodes } from "@/lib/canvas/canvas-depth-recover";
 import { depthCaptureTaskMetadata, depthCaptureWaitFailureMetadata } from "@/lib/canvas/canvas-depth-capture";
 import { persistOwnedCanvasMediaNodes } from "@/lib/canvas/canvas-media-persist";
-import { captureVideoFrames, resolveVideoFramePresetTimeMs } from "@/lib/canvas/canvas-video-frame";
+import { captureVideoFrames, resolveVideoFramePresetTimeMs, MAX_VIDEO_FRAME_BATCH, type CapturedVideoFrame } from "@/lib/canvas/canvas-video-frame";
 import { resolveCanvasVideoDurationMs } from "@/lib/canvas/canvas-video-duration";
 import { buildVideoFrameNodes } from "@/lib/canvas/canvas-video-frame-nodes";
 import { mergeVideos, warmFFmpeg, type MergeVideoProgress } from "@/lib/canvas/canvas-video-merge";
@@ -681,6 +681,15 @@ export function useCanvasMediaTools({
         const resourceId = ownedResourceIdFromMediaRef(node.metadata?.storageKey, content);
         const effectiveStorageKey = node.metadata?.storageKey || (resourceId ? resourceStorageKey(resourceId) : "");
         if ((!content && !effectiveStorageKey) || extractingVideoFramesNodeIdRef.current || !params.timesMs.length) return;
+        if (params.timesMs.length > MAX_VIDEO_FRAME_BATCH) {
+            message.warning(`单次最多提取 ${MAX_VIDEO_FRAME_BATCH} 张，请增大抽帧间隔`);
+            return;
+        }
+        const expectedScope = captureUserScope();
+        const assertActiveCanvas = () => {
+            assertUserScope(expectedScope);
+            if (projectIdRef.current !== projectId) throw new Error("画布已切换，抽帧已停止；请返回原画布重新抽取");
+        };
         const progress = startUploadStatus("关键帧截取", "读取视频资源", params.timesMs.length + 2);
         extractingVideoFramesNodeIdRef.current = node.id;
         setExtractingVideoFramesNodeId(node.id);
@@ -688,40 +697,51 @@ export function useCanvasMediaTools({
         try {
             const storedBlob = effectiveStorageKey ? await getMediaBlob(effectiveStorageKey).catch(() => null) : null;
             const resolvedUrl = storedBlob ? "" : await resolveMediaUrl(effectiveStorageKey, content || "").catch(() => content || "");
-            progress.update("定位并绘制所选画面", 2);
+            progress.update("定位并绘制所选画面", 1);
+            const uploadedFrames: Array<{ timeMs: number; image: Awaited<ReturnType<typeof uploadImage>> }> = [];
+            const uploadFailures: string[] = [];
+            const captureOptions = {
+                onFrame: async (frame: CapturedVideoFrame) => {
+                    assertActiveCanvas();
+                    try {
+                        uploadedFrames.push({ timeMs: frame.timeMs, image: await uploadImage(frame.blob) });
+                    } catch (error) {
+                        uploadFailures.push(error instanceof Error ? error.message : "画面图片保存失败");
+                    }
+                },
+                onProgress: (completed: number, total: number) => {
+                    assertActiveCanvas();
+                    progress.update(`抽取并保存画面（${completed}/${total}）`, completed + 1);
+                },
+            };
             let captured: Awaited<ReturnType<typeof captureVideoFrames>>;
             try {
-                captured = await captureVideoFrames(storedBlob || resolvedUrl, params.timesMs);
+                captured = await captureVideoFrames(storedBlob || resolvedUrl, params.timesMs, captureOptions);
             } catch (captureError) {
+                assertActiveCanvas();
                 const playbackBlob = resourceId ? await getResourcePlaybackBlob(resourceStorageKey(resourceId)).catch(() => null) : null;
                 if (!playbackBlob) throw captureError;
-                captured = await captureVideoFrames(playbackBlob, params.timesMs);
+                captured = await captureVideoFrames(playbackBlob, params.timesMs, captureOptions);
             }
-            const uploadedFrames = [];
-            const uploadFailures: string[] = [];
-            for (let index = 0; index < captured.frames.length; index += 1) {
-                const frame = captured.frames[index];
-                try {
-                    progress.update(`保存画面（${index + 1}/${captured.frames.length}）`, index + 3);
-                    uploadedFrames.push({ timeMs: frame.timeMs, image: await uploadImage(frame.blob) });
-                } catch (error) {
-                    uploadFailures.push(error instanceof Error ? error.message : "画面图片上传失败");
-                }
-            }
+            assertActiveCanvas();
             const frameNodes = buildVideoFrameNodes(node, uploadedFrames, nodesRef.current);
             if (!frameNodes.length) throw new Error(uploadFailures[0] || "画面图片保存失败");
             const links = frameNodes.map((frameNode) => ({ id: nanoid(), fromNodeId: node.id, toNodeId: frameNode.id }));
-            const nextNodes = [...nodesRef.current, ...frameNodes];
-            const nextConnections = [...connectionsRef.current, ...links];
-            const selection = new Set(frameNodes.map((frameNode) => frameNode.id));
-            nodesRef.current = nextNodes;
-            connectionsRef.current = nextConnections;
-            selectedNodeIdsRef.current = selection;
-            setNodes(nextNodes);
-            setConnections(nextConnections);
-            setSelectedNodeIds(selection);
-            setSelectedConnectionId(null);
-            await persistMediaNodes(frameNodes, links);
+            {
+                const nextNodes = [...nodesRef.current, ...frameNodes];
+                const nextConnections = [...connectionsRef.current, ...links];
+                const selection = new Set(frameNodes.map((frameNode) => frameNode.id));
+                nodesRef.current = nextNodes;
+                connectionsRef.current = nextConnections;
+                selectedNodeIdsRef.current = selection;
+                setNodes(nextNodes);
+                setConnections(nextConnections);
+                setSelectedNodeIds(selection);
+                setSelectedConnectionId(null);
+            }
+            progress.update("保存图片节点到原画布", params.timesMs.length + 2);
+            await persistMediaNodes(frameNodes, links, { expectedScope });
+            assertActiveCanvas();
             const failedCount = captured.failures.length + uploadFailures.length;
             progress.done(failedCount ? `已截取 ${frameNodes.length} 个关键帧，${failedCount} 个失败` : `已截取 ${frameNodes.length} 个关键帧并创建独立图片节点`);
             if (failedCount) message.warning(`${failedCount} 个时间点提取失败，其余画面已创建`);
@@ -734,12 +754,15 @@ export function useCanvasMediaTools({
             extractingVideoFramesNodeIdRef.current = null;
             setExtractingVideoFramesNodeId(null);
         }
-    }, [connectionsRef, message, nodesRef, persistMediaNodes, selectedNodeIdsRef, setConnections, setNodes, setSelectedConnectionId, setSelectedNodeIds, startUploadStatus]);
+    }, [connectionsRef, message, nodesRef, persistMediaNodes, projectId, selectedNodeIdsRef, setConnections, setNodes, setSelectedConnectionId, setSelectedNodeIds, startUploadStatus]);
 
-    // 视频节点工具栏的三个快捷取帧动作直接执行，不再打开批量选帧弹窗。
-    const extractVideoFrameAt = useCallback((node: CanvasNodeData, preset: "current" | "first" | "last" = "current") => {
+    const extractVideoFrameAt = useCallback((node: CanvasNodeData, preset: "current" | "first" | "last" | "interval" = "current") => {
         if (!node.metadata?.content && !node.metadata?.storageKey) {
             message.warning("视频节点为空，无法进行关键帧截取");
+            return;
+        }
+        if (preset === "interval") {
+            setFrameDialogNodeId(node.id);
             return;
         }
         const video = document.querySelector<HTMLVideoElement>(`[data-node-id="${CSS.escape(node.id)}"] video`);

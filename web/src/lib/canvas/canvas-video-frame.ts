@@ -3,6 +3,21 @@ const VIDEO_FRAME_PRESENTATION_TIMEOUT_MS = 1_500;
 const MINIMUM_SEEK_EPSILON_MS = 1;
 const LAST_FRAME_EPSILON_MS = 100;
 const VIDEO_TAIL_PRESENTATION_EPSILON_SECONDS = 0.02;
+export const MAX_VIDEO_FRAME_BATCH = 600;
+
+// Use integer milliseconds so decimal intervals do not accumulate floating point drift.
+export function planVideoFrameInterval(durationMs: number, intervalMs: number) {
+    if (!Number.isFinite(durationMs) || durationMs <= 0 || !Number.isFinite(intervalMs) || intervalMs < 1) {
+        return { count: 0, timesMs: [] as number[], error: "请等待视频加载，并输入有效的抽帧间隔" };
+    }
+    const step = Math.round(intervalMs);
+    const count = Math.ceil(Math.round(durationMs) / step);
+    if (count > MAX_VIDEO_FRAME_BATCH) {
+        return { count, timesMs: [] as number[], error: `预计 ${count} 张，单次最多 ${MAX_VIDEO_FRAME_BATCH} 张，请增大间隔` };
+    }
+    const timesMs = normalizeVideoFrameTimes(Array.from({ length: count }, (_, index) => index * step), durationMs);
+    return { count: timesMs.length, timesMs, error: "" };
+}
 
 export type CapturedVideoFrame = {
     timeMs: number;
@@ -70,7 +85,10 @@ function waitForAnimationFrames() {
     });
 }
 
-export async function captureVideoFrames(source: Blob | string, timesMs: number[]): Promise<VideoFrameCaptureResult> {
+export async function captureVideoFrames(source: Blob | string, timesMs: number[], options?: {
+    onFrame?: (frame: CapturedVideoFrame) => Promise<void>;
+    onProgress?: (completed: number, total: number) => void;
+}): Promise<VideoFrameCaptureResult> {
     const blob = await readVideoBlob(source);
     const objectUrl = URL.createObjectURL(blob);
     const video = document.createElement("video");
@@ -95,6 +113,8 @@ export async function captureVideoFrames(source: Blob | string, timesMs: number[
         if (!context) throw new Error("浏览器无法创建图片画布");
         const frames: CapturedVideoFrame[] = [];
         const failures: VideoFrameCaptureFailure[] = [];
+        let capturedCount = 0;
+        let completed = 0;
         for (const timeMs of normalizedTimes) {
             try {
                 const targetSeconds = videoFrameSeekSeconds(timeMs, video.duration * 1000);
@@ -105,12 +125,17 @@ export async function captureVideoFrames(source: Blob | string, timesMs: number[
                 }
                 await waitForPresentedVideoFrame(video);
                 context.drawImage(video, 0, 0, canvas.width, canvas.height);
-                frames.push({ timeMs, blob: await canvasToPngBlob(canvas), width: canvas.width, height: canvas.height });
+                const frame = { timeMs, blob: await canvasToPngBlob(canvas), width: canvas.width, height: canvas.height };
+                // Save each frame before decoding the next, instead of retaining hundreds of PNG blobs.
+                if (options?.onFrame) await options.onFrame(frame);
+                else frames.push(frame);
+                capturedCount += 1;
             } catch (error) {
                 failures.push({ timeMs, error: error instanceof Error ? error.message : "画面提取失败" });
             }
+            options?.onProgress?.(++completed, normalizedTimes.length);
         }
-        if (!frames.length) throw new Error(failures[0]?.error || "画面提取失败");
+        if (!capturedCount) throw new Error(failures[0]?.error || "画面提取失败");
         return { frames, failures };
     } finally {
         video.pause();

@@ -50,7 +50,7 @@ type CanvasNodeToolbarProps = {
     onLighting: (node: CanvasNodeData) => void;
     onPanorama: (node: CanvasNodeData) => void;
     onViewImage: (node: CanvasNodeData) => void;
-    onExtractVideoFrames: (node: CanvasNodeData, preset?: "current" | "first" | "last") => void;
+    onExtractVideoFrames: (node: CanvasNodeData, preset?: "current" | "first" | "last" | "interval") => void;
     onExtractAudioFromVideo: (node: CanvasNodeData) => void;
     onTrimVideoSegments: (node: CanvasNodeData) => void;
     onDepthCapture: (node: CanvasNodeData) => void;
@@ -358,6 +358,7 @@ export function CanvasNodeToolbar({
     const videoKeyframeTool = registryToolbarTools.find((tool) => tool.id === "extractFrames");
     const videoKeyframeTools: ToolbarTool[] = videoKeyframeTool
         ? [
+              { ...videoKeyframeTool, id: "keyframe-interval", label: "按间隔批量抽帧…", onClick: () => onExtractVideoFrames(node, "interval") },
               { ...videoKeyframeTool, id: "keyframe-current", label: "截取当前帧", onClick: () => onExtractVideoFrames(node, "current") },
               { ...videoKeyframeTool, id: "keyframe-first", label: "截取首帧", onClick: () => onExtractVideoFrames(node, "first") },
               { ...videoKeyframeTool, id: "keyframe-last", label: "截取尾帧", onClick: () => onExtractVideoFrames(node, "last") },
