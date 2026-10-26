@@ -2,6 +2,7 @@ import localforage from "localforage";
 import type { StateStorage } from "zustand/middleware";
 
 import { scopedStorageKey } from "@/lib/user-scope";
+import { readWorkspaceCache } from "@/lib/workspace-cache-recovery";
 
 export const INFINITE_CANVAS_DB_NAME = "infinite-canvas";
 export const APP_STATE_STORE_NAME = "app_state";
@@ -110,7 +111,7 @@ export function localForageStorageForScope(scope?: string): StateStorage {
     return {
         getItem: async (name) => {
             if (typeof window === "undefined") return null;
-            return (await store.getItem<string>(keyFor(name))) || null;
+            return (await readWorkspaceCache(name, () => store.getItem<string>(keyFor(name)))) || null;
         },
         setItem: async (name, value) => {
             if (typeof window === "undefined") return;

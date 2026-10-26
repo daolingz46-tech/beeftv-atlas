@@ -10,6 +10,7 @@ import { getWorkspaceBootstrap, type WorkspaceBootstrapPayload } from "@/service
 import { commitModelConfig, flushModelConfig, hydrateModelConfig } from "@/services/model-config-repository";
 import { normalizeConfigSnapshot, useConfigStore } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
+import { workspaceCacheRecoveryStores } from "@/lib/workspace-cache-recovery";
 
 export function WorkspaceBootstrapHydrator({ children }: { children: ReactNode }) {
     const hydrated = useUserStore((state) => state.hydrated);
@@ -20,8 +21,9 @@ export function WorkspaceBootstrapHydrator({ children }: { children: ReactNode }
         let cancelled = false;
         const loadWorkspace = () => {
             const bootstrap = getWorkspaceBootstrap();
-            const timeout = new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error("本地工作区启动超时")), 15_000));
-            return Promise.race([bootstrap, timeout]);
+            let timer: number | undefined;
+            const timeout = new Promise<never>((_, reject) => { timer = window.setTimeout(() => reject(new Error("本地工作区启动超时")), 15_000); });
+            return Promise.race([bootstrap, timeout]).finally(() => window.clearTimeout(timer));
         };
         void initializeWorkspaceState({
             loadWorkspace,
@@ -68,7 +70,10 @@ export function WorkspaceBootstrapHydrator({ children }: { children: ReactNode }
     }, []);
 
     if (restoreStatus === "error") return <WorkspaceErrorState title="工作区暂时无法加载" description="项目或模型配置未能完成读取。原有配置不会被覆盖，请重新加载后再试。" onRetry={() => window.location.reload()} />;
-    return hydrated && restoreStatus === "ready" ? children : <FullScreenLoader label="正在准备本地工作区" detail="加载项目、画布与模型配置" />;
+    return hydrated && restoreStatus === "ready" ? <>
+        {workspaceCacheRecoveryStores().length > 0 && <div role="status" className="px-4 py-2 text-sm">部分本机缓存无法读取，已重新读取本机项目库。未保存的改动请查看版本记录中的本机草稿。</div>}
+        {children}
+    </> : <FullScreenLoader label="正在准备本地工作区" detail="加载项目、画布与模型配置" />;
 }
 
 export async function initializeWorkspaceState<T>({

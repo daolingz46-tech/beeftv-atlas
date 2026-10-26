@@ -95,6 +95,8 @@ export const useCreationPreferencesStore = create<CreationPreferencesStore>()(
         }),
         {
             name: CREATION_PREFERENCES_STORE_KEY,
+            // Session bootstrap explicitly hydrates this store after create() has returned.
+            skipHydration: true,
             storage: createJSONStorage(() => scopedLocalStorage),
             partialize: (state) => ({ preferences: state.preferences }),
             merge: (persisted, current) => {
